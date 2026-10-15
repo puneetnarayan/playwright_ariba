@@ -1,0 +1,9 @@
+node_modules/
+runtime/
+browsers/
+.dependencies-ready
+# recordings, screenshots and uploaded workbooks may contain session tokens / internal data
+output/*
+!output/.gitkeep
+input/*
+!input/README.txt

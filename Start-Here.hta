@@ -1,0 +1,36 @@
+<html>
+<head>
+  <title>PR Inspector - Start</title>
+  <hta:application id="PRLauncher" applicationname="PR Portal Inspector" border="thin" caption="yes" showintaskbar="yes" singleinstance="yes" sysmenu="yes" windowstate="normal" />
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f6fb;color:#172033;font:14px 'Segoe UI',Arial,sans-serif}
+    .shell{width:100%;padding:22px}.brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+    .logo{width:42px;height:42px;border-radius:13px;background:#1d4ed8;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px}
+    h1{font-size:20px;margin:0}p{color:#596579;line-height:1.5}.panel{background:#fff;border:1px solid #dbe3ef;border-radius:16px;padding:18px}
+    button{border:0;border-radius:10px;background:#1d4ed8;color:#fff;font-weight:700;padding:12px 16px;cursor:pointer;width:100%;font-size:14px}
+    button:hover{background:#1e40af}.hint{font-size:12px;color:#64748b;margin-top:12px}.status{margin-top:12px;font-size:13px;color:#334155}
+  </style>
+  <script language="javascript">
+    function launchApp(){
+      try {
+        var shell = new ActiveXObject('WScript.Shell');
+        var fso = new ActiveXObject('Scripting.FileSystemObject');
+        var folder = fso.GetParentFolderName(unescape(location.pathname).replace(/^\\/,'').replace(/\//g,'\\'));
+        var bat = folder + '\\Start-App.bat';
+        document.getElementById('status').innerText = 'Starting the local app. First-time setup may take a few minutes…';
+        shell.Run('"' + bat + '"', 1, false);
+      } catch(e) {
+        document.getElementById('status').innerText = 'Windows blocked this HTML launcher. Open Start-App.bat in this folder instead. Details: ' + e.message;
+      }
+    }
+  </script>
+</head>
+<body><div class="shell">
+  <div class="brand"><div class="logo">PR</div><div><h1>PR Portal Inspector</h1><div class="hint">Local Playwright recorder · Read-only workflow capture</div></div></div>
+  <div class="panel">
+    <p>Press the button to start the inspector and open its compact app window in your browser. You do not need to type commands in PowerShell.</p>
+    <button onclick="launchApp()">▶ Start Inspector</button>
+    <div id="status" class="status">Ready to start</div>
+    <p class="hint">First launch downloads a portable Node.js runtime and installs the app dependencies and Chromium into this folder. Internet is required for first-time setup; after setup, the folder can run without a global Node.js install. Credentials and recordings stay on this PC. Do not use approval, release, reject, or other write actions.</p>
+  </div>
+</div></body></html>
