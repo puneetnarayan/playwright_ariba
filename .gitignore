@@ -9,3 +9,4 @@ input/*
 !input/README.txt
 site/*.zip
 site/version.json
+package-lock.json

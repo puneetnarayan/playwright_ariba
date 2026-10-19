@@ -21,6 +21,8 @@ if not exist "%NODE_EXE%" (
   goto :failed
 )
 
+rem Re-run npm install when a newer version adds packages (e.g. exceljs).
+if not exist "%APP_DIR%node_modules\exceljs\package.json" del "%APP_DIR%.dependencies-ready" >nul 2>nul
 if not exist "%APP_DIR%.dependencies-ready" (
   echo [2/3] Installing application packages locally. This may take a few minutes...
   call "%NPM_CMD%" install --omit=dev --no-audit --no-fund
@@ -31,6 +33,7 @@ if not exist "%APP_DIR%.dependencies-ready" (
   if not exist "%APP_DIR%node_modules\express\package.json" goto :dependenciesFailed
   if not exist "%APP_DIR%node_modules\playwright\package.json" goto :dependenciesFailed
   if not exist "%APP_DIR%node_modules\xlsx\package.json" goto :dependenciesFailed
+  if not exist "%APP_DIR%node_modules\exceljs\package.json" goto :dependenciesFailed
   echo ready>"%APP_DIR%.dependencies-ready"
 )
 

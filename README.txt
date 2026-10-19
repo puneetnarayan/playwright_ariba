@@ -36,7 +36,8 @@ FEATURES
 - Screen snapshots with visible markers; this is a sequence of frames, not a continuous video.
 - Sequence playback is visual only; it does not replay clicks or submit forms.
 - Past recordings list, timestamps, age, component counts and screen-frame counts.
-- Excel input queue for workbook upload, worksheet selection and preview. Row-by-row portal automation is not yet implemented.
+- Excel input queue: upload a workbook, pick the PR-number column, click Run lookup. Each number is searched in the logged-in Playwright browser (read-only), and the current stage plus days at that stage are written to output\PR_status_results_<time>.xlsx (green rows = success, red = NOT_FOUND/ERROR). A Debug sheet and output\lookup_debug\ hold page text and screenshots per row for tuning.
+- lookup-config.json holds the search selectors, stage/date labels, date order (DMY or MDY) and optional tabs to open. Edit it and run again; no restart needed.
 - HELP.html and public\help.html provide detailed instructions and safety notes.
 
 Troubleshooting: If Chromium setup previously failed with 'node is not recognized', use this updated Start-App.bat. It adds the bundled runtime\node folder to PATH for this app only, then rerun Start-App.bat. It does not change the system PATH or require global Node.js.

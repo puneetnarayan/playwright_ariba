@@ -1,0 +1,25 @@
+{
+  "_help": "Edit and save; picked up on the next Run (no restart). Selectors are CSS. Labels are matched against visible page text, case-insensitive.",
+  "search": {
+    "inputSelector": "#_3fjlgc",
+    "buttonSelector": "#_poi6_b",
+    "pressEnterInstead": false
+  },
+  "result": {
+    "linkSelector": "",
+    "note": "Empty linkSelector = first link whose text contains the number."
+  },
+  "afterOpen": [],
+  "afterOpenNote": "Optional tabs to click before reading, e.g. [{\"clickText\": \"Approval Flow\"}]. Read-only tabs/links only.",
+  "stage": {
+    "selector": "",
+    "labels": ["Current Stage", "Current Status", "Stage", "Status"]
+  },
+  "stageDate": {
+    "selector": "",
+    "labels": ["Status Changed", "Last Modified", "Last Updated", "Modified Date", "Updated"],
+    "order": "DMY"
+  },
+  "timeouts": { "searchMs": 20000, "pageMs": 20000, "loginWaitMinutes": 10 },
+  "pauseBetweenRowsMs": 1500
+}
