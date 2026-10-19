@@ -1,4 +1,5 @@
 {
+  "framework": null,
   "installCommand": "echo no-install",
   "buildCommand": "node scripts/build-site.js",
   "outputDirectory": "site"
