@@ -6,6 +6,8 @@ set "APP_DIR=%~dp0"
 set "NODE_DIR=%APP_DIR%runtime\node"
 set "NODE_EXE=%NODE_DIR%\node.exe"
 set "NPM_CMD=%NODE_DIR%\npm.cmd"
+rem Make the portable runtime discoverable to npm and Playwright command shims.
+set "PATH=%NODE_DIR%;%PATH%"
 set "BROWSER_DIR=%APP_DIR%browsers"
 set "PLAYWRIGHT_BROWSERS_PATH=%BROWSER_DIR%"
 
@@ -40,6 +42,7 @@ if not defined CHROMIUM_FOUND (
     echo Playwright package was not installed correctly.
     goto :failed
   )
+  rem Use the app-local Node.js from PATH; never rely on globally installed Node.js.
   call "%APP_DIR%node_modules\.bin\playwright.cmd" install chromium
   if errorlevel 1 (
     echo Chromium installation failed. Check internet access and proxy settings.

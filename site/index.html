@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portal Recorder Download</title>
+<style>
+:root{--bg:#f6f7fc;--card:#fff;--ink:#26334b;--muted:#5d6985;--line:#e2e7f1;--accent:#5b6fc7;--warn:#fff7ed;--warnline:#f3c999}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#12151f;--card:#1b2030;--ink:#e6eaf5;--muted:#a3adc7;--line:#2c3350;--accent:#8fa2ee;--warn:#2b2218;--warnline:#6b4a22}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Segoe UI,Arial,sans-serif}
+main{max-width:760px;margin:0 auto;padding:32px 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+h1{font-size:24px;margin:0 0 6px}h2{font-size:17px;margin:0 0 8px}p,li{color:var(--muted)}
+.btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;padding:11px 18px;border-radius:10px}
+.warn{background:var(--warn);border:1px solid var(--warnline);border-radius:10px;padding:12px 14px}
+code{background:var(--bg);padding:1px 6px;border-radius:5px}small{color:var(--muted)}
+</style></head><body><main>
+<div class="card">
+  <h1>Portal Inspector &amp; Recorder</h1>
+  <p>A portable Windows tool that opens any web portal in a Playwright browser so you can inspect page components and record a workflow. The default portal is the JSW Ariba sourcing site; change the URL in the app for any other page.</p>
+  <p><a class="btn" href="PR_Portal_Inspector_Recorder.zip" download>Download latest (.zip)</a></p>
+  <small id="ver">Loading version…</small>
+</div>
+<div class="card"><h2>How to use</h2>
+  <ol>
+    <li>Extract the whole zip into a writable local folder.</li>
+    <li>Double-click <code>Start-Here.hta</code> (or <code>Start-App.bat</code> if it is blocked). The first run needs internet to fetch Node.js, packages and Chromium.</li>
+    <li>In the app, enter the portal URL, log in yourself, then inspect or record.</li>
+  </ol>
+  <p>It runs only on your PC, at <code>127.0.0.1</code>. This page just hosts the download; no portal data is sent here.</p>
+</div>
+<div class="warn"><b>Use only on systems you are authorized to access.</b> The read-only guard is best-effort and cannot guarantee every portal action is harmless. Never share credentials, and review recordings (they may contain session tokens and internal data) before sharing them.</div>
+</main>
+<script>
+fetch('version.json').then(r=>r.json()).then(v=>{document.getElementById('ver').textContent='Version '+v.commit+' · built '+new Date(v.builtAt).toLocaleString()+' · '+Math.round(v.bytes/1024)+' KB'}).catch(()=>{document.getElementById('ver').textContent=''});
+</script></body></html>

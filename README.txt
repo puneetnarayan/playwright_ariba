@@ -39,6 +39,8 @@ FEATURES
 - Excel input queue for workbook upload, worksheet selection and preview. Row-by-row portal automation is not yet implemented.
 - HELP.html and public\help.html provide detailed instructions and safety notes.
 
+Troubleshooting: If Chromium setup previously failed with 'node is not recognized', use this updated Start-App.bat. It adds the bundled runtime\node folder to PATH for this app only, then rerun Start-App.bat. It does not change the system PATH or require global Node.js.
+
 TROUBLESHOOTING
 - If Start-Here.hta is blocked by Windows or office policy, double-click Start-App.bat.
 - If downloads fail, verify internet/proxy access to https://nodejs.org and the npm registry. Ask IT to allow approved downloads if needed; do not bypass company policy.
