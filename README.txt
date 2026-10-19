@@ -1,5 +1,11 @@
 PR PORTAL INSPECTOR & RECORDER — PORTABLE WINDOWS EDITION
 
+SHARED FILES FOLDER (SAVES DISK SPACE)
+- Node.js, npm packages and Chromium are stored once in C:\Portable_ARIBA_Files (created automatically) and reused by every app version. A new zip only needs the small app files; nothing large is downloaded again unless the Node.js version, the package list or the Playwright browser version changes.
+- node_modules in the app folder is a Windows folder link (junction) to C:\Portable_ARIBA_Files\modules\<id>. Do not delete the shared folder while using the app.
+- If C:\ is not writable, the app falls back to a 'shared' folder inside the app folder. To use another location, set the environment variable PORTABLE_ARIBA_FILES before launching.
+- Old versions' 'runtime', 'browsers' and 'node_modules' folders can be deleted. Copy 'output' and 'input' from an old version if you want to keep recordings and results.
+
 GOAL
 - Runs from its own extracted folder with a bundled-in-folder Node.js runtime, local npm dependencies, and local Playwright Chromium.
 - Does not require a global Node.js installation.

@@ -1,12 +1,13 @@
+param(
+  [Parameter(Mandatory = $true)][string]$NodeRoot,
+  [string]$NodeVersion = 'v22.16.0'
+)
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$runtimeRoot = Join-Path $root 'runtime'
-$nodeRoot = Join-Path $runtimeRoot 'node'
-$nodeVersion = 'v22.16.0'
-$archiveName = "node-$nodeVersion-win-x64.zip"
-$downloadUrl = "https://nodejs.org/dist/$nodeVersion/$archiveName"
+$runtimeRoot = Split-Path -Parent $NodeRoot
+$archiveName = "node-$NodeVersion-win-x64.zip"
+$downloadUrl = "https://nodejs.org/dist/$NodeVersion/$archiveName"
 
-if (Test-Path (Join-Path $nodeRoot 'node.exe')) {
+if (Test-Path (Join-Path $NodeRoot 'node.exe')) {
   Write-Host 'Portable Node.js is already available.'
   exit 0
 }
@@ -14,17 +15,17 @@ if (Test-Path (Join-Path $nodeRoot 'node.exe')) {
 New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 $archivePath = Join-Path $runtimeRoot $archiveName
 $tempExtract = Join-Path $runtimeRoot 'extract'
-Write-Host "Downloading official portable Node.js $nodeVersion (Windows x64)..."
-Write-Host 'This is a one-time setup and requires an internet connection.'
+Write-Host "Downloading official portable Node.js $NodeVersion (Windows x64) into the shared folder..."
+Write-Host 'This happens once per Node.js version and is reused by all app versions. Internet is required.'
 try {
   Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
   if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
   New-Item -ItemType Directory -Path $tempExtract -Force | Out-Null
   Expand-Archive -Path $archivePath -DestinationPath $tempExtract -Force
-  $extracted = Join-Path $tempExtract "node-$nodeVersion-win-x64"
+  $extracted = Join-Path $tempExtract "node-$NodeVersion-win-x64"
   if (-not (Test-Path (Join-Path $extracted 'node.exe'))) { throw 'The downloaded Node.js archive did not contain node.exe.' }
-  if (Test-Path $nodeRoot) { Remove-Item $nodeRoot -Recurse -Force }
-  Move-Item -Path $extracted -Destination $nodeRoot
+  if (Test-Path $NodeRoot) { Remove-Item $NodeRoot -Recurse -Force }
+  Move-Item -Path $extracted -Destination $NodeRoot
   Remove-Item $tempExtract -Recurse -Force
   Remove-Item $archivePath -Force
   Write-Host 'Portable Node.js is ready.'

@@ -2,18 +2,12 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 title PR Portal Inspector - Portable Launcher
-set "APP_DIR=%~dp0"
-set "NODE_DIR=%APP_DIR%runtime\node"
-set "NODE_EXE=%NODE_DIR%\node.exe"
-set "NPM_CMD=%NODE_DIR%\npm.cmd"
-rem Make the portable runtime discoverable to npm and Playwright command shims.
-set "PATH=%NODE_DIR%;%PATH%"
-set "BROWSER_DIR=%APP_DIR%browsers"
-set "PLAYWRIGHT_BROWSERS_PATH=%BROWSER_DIR%"
+call "%~dp0Env-Setup.bat"
+echo Shared files folder: %PORTABLE_ARIBA_FILES%
 
 if not exist "%NODE_EXE%" (
-  echo [1/3] Preparing portable Node.js inside this folder...
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%First-Run-Setup.ps1"
+  echo [1/3] Preparing portable Node.js in the shared folder...
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%APP_DIR%First-Run-Setup.ps1" -NodeRoot "%NODE_DIR%" -NodeVersion "%NODE_VERSION%"
   if errorlevel 1 goto :failed
 )
 if not exist "%NODE_EXE%" (
@@ -21,37 +15,59 @@ if not exist "%NODE_EXE%" (
   goto :failed
 )
 
-rem Re-run npm install when a newer version adds packages (e.g. exceljs).
-if not exist "%APP_DIR%node_modules\exceljs\package.json" del "%APP_DIR%.dependencies-ready" >nul 2>nul
-if not exist "%APP_DIR%.dependencies-ready" (
-  echo [2/3] Installing application packages locally. This may take a few minutes...
+rem npm packages are cached per unique dependency set and linked into this app folder.
+set "DEP_HASH="
+for /f "delims=" %%H in ('node scripts\dep-hash.js') do set "DEP_HASH=%%H"
+if not defined DEP_HASH goto :failed
+set "MODULES_DIR=%PORTABLE_ARIBA_FILES%\modules\%DEP_HASH%"
+if not exist "%MODULES_DIR%\" mkdir "%MODULES_DIR%"
+if not exist "%MODULES_DIR%\.ready" (
+  echo [2/3] Installing application packages into the shared folder. This may take a few minutes...
+  copy /y "%APP_DIR%package.json" "%MODULES_DIR%\package.json" >nul
+  pushd "%MODULES_DIR%"
   call "%NPM_CMD%" install --omit=dev --no-audit --no-fund
   if errorlevel 1 (
+    popd
     echo Package installation failed. Check internet access and try again.
     goto :failed
   )
-  if not exist "%APP_DIR%node_modules\express\package.json" goto :dependenciesFailed
-  if not exist "%APP_DIR%node_modules\playwright\package.json" goto :dependenciesFailed
-  if not exist "%APP_DIR%node_modules\xlsx\package.json" goto :dependenciesFailed
-  if not exist "%APP_DIR%node_modules\exceljs\package.json" goto :dependenciesFailed
-  echo ready>"%APP_DIR%.dependencies-ready"
+  popd
+  if not exist "%MODULES_DIR%\node_modules\express\package.json" goto :dependenciesFailed
+  if not exist "%MODULES_DIR%\node_modules\playwright\package.json" goto :dependenciesFailed
+  if not exist "%MODULES_DIR%\node_modules\xlsx\package.json" goto :dependenciesFailed
+  if not exist "%MODULES_DIR%\node_modules\exceljs\package.json" goto :dependenciesFailed
+  echo ready>"%MODULES_DIR%\.ready"
+) else (
+  echo [2/3] Application packages already in the shared folder - reusing them.
 )
 
-set "CHROMIUM_FOUND="
-for /d %%D in ("%BROWSER_DIR%\chromium-*") do if exist "%%~fD" set "CHROMIUM_FOUND=1"
-if not defined CHROMIUM_FOUND (
-  echo [3/3] Installing Playwright Chromium into this application folder...
-  if not exist "%APP_DIR%node_modules\.bin\playwright.cmd" (
-    echo Playwright package was not installed correctly.
-    goto :failed
-  )
-  rem Use the app-local Node.js from PATH; never rely on globally installed Node.js.
-  call "%APP_DIR%node_modules\.bin\playwright.cmd" install chromium
-  if errorlevel 1 (
+rem Link this app's node_modules to the shared copy. A plain rmdir removes only a link; a real old folder is deleted below.
+rmdir "%APP_DIR%node_modules" >nul 2>nul
+if exist "%APP_DIR%node_modules" rmdir /s /q "%APP_DIR%node_modules" >nul 2>nul
+mklink /J "%APP_DIR%node_modules" "%MODULES_DIR%\node_modules" >nul
+if errorlevel 1 (
+  echo Could not link shared packages; installing a local copy instead.
+  call "%NPM_CMD%" install --omit=dev --no-audit --no-fund
+  if errorlevel 1 goto :failed
+)
+
+echo [3/3] Checking Playwright Chromium in the shared folder...
+if not exist "%APP_DIR%node_modules\.bin\playwright.cmd" (
+  echo Playwright package was not installed correctly.
+  goto :failed
+)
+call "%APP_DIR%node_modules\.bin\playwright.cmd" install chromium
+if errorlevel 1 (
+  set "CHROMIUM_FOUND="
+  for /d %%D in ("%BROWSER_DIR%\chromium-*") do if exist "%%~fD" set "CHROMIUM_FOUND=1"
+  if not defined CHROMIUM_FOUND (
     echo Chromium installation failed. Check internet access and proxy settings.
     goto :failed
   )
+  echo Could not check for a newer Chromium; continuing with the one already downloaded.
 )
+
+if exist "%APP_DIR%runtime\node\node.exe" echo Note: the old "runtime" and "browsers" folders in this app folder are no longer used and can be deleted to save space.
 
 rem Check whether the local server is already running before starting another instance.
 set "SERVER_RUNNING="
