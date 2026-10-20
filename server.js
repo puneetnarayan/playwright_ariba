@@ -3,7 +3,7 @@ const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { createLookup } = require('./lookup');
+const { createLookup, APP_VERSION } = require('./lookup');
 const app = express();
 const PORT = Number(process.env.PORT || 3030);
 const OUT = path.join(__dirname, 'output');
@@ -214,6 +214,6 @@ const lookup=createLookup({getPage:()=>page,isRecording:()=>recording,resultsDir
 app.post('/api/lookup/start',async(req,res)=>{try{const r=readPrNumbers(String(req.body?.sheetName||''));await lookup.start({numbers:r.numbers,sourceName:r.fileName});res.json({ok:true,count:r.numbers.length})}catch(e){res.status(400).json({error:e.message})}});
 app.post('/api/lookup/stop',(_req,res)=>res.json({ok:true,stopping:lookup.stop()}));
 app.get('/api/lookup/status',(_req,res)=>res.json({ok:true,job:lookup.status(),folder:RESULTS,trackerExists:!!lookup.file()}));
-app.get('/api/lookup/headers',(req,res)=>{try{const r=readPrNumbers(String(req.query.sheet||''));res.json({ok:true,count:r.numbers.length,preview:r.numbers.slice(0,5),headerless:r.headerless,column:r.column,sheet:r.sheet,folder:RESULTS})}catch(e){res.status(400).json({error:e.message})}});
+app.get('/api/lookup/headers',(req,res)=>{try{const r=readPrNumbers(String(req.query.sheet||''));res.json({ok:true,count:r.numbers.length,preview:r.numbers.slice(0,5),headerless:r.headerless,column:r.column,sheet:r.sheet,folder:RESULTS,version:APP_VERSION})}catch(e){res.status(400).json({error:e.message})}});
 app.get('/api/lookup/download',(_req,res)=>{const f=lookup.file();if(!f||!fs.existsSync(f))return res.status(404).send('No tracker workbook yet. Run the lookup first.');res.download(f)});
 app.listen(PORT,'127.0.0.1',()=>console.log(`PR Portal Inspector running at http://127.0.0.1:${PORT}\nKeep this PowerShell window open. Use only for authorized read-only inspection.`));

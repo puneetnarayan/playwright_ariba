@@ -14,7 +14,8 @@ function walk(rel, out) {
   else out.push(rel.split(path.sep).join('/'));
 }
 const files = []; INCLUDE.forEach(p => walk(p, files));
-files.push('output/.gitkeep');
+files.push('output/.gitkeep', 'VERSION.txt');
+const version = (process.env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7);
 
 const parts = [], central = []; let offset = 0;
 const add = (name, data) => {
@@ -31,7 +32,7 @@ const add = (name, data) => {
   central.push(c, nameBuf);
   offset += 30 + nameBuf.length + comp.length;
 };
-for (const f of files) add(f, fs.existsSync(path.join(ROOT, f)) ? fs.readFileSync(path.join(ROOT, f)) : Buffer.alloc(0));
+for (const f of files) add(f, f === 'VERSION.txt' ? Buffer.from(version + '\n') : fs.existsSync(path.join(ROOT, f)) ? fs.readFileSync(path.join(ROOT, f)) : Buffer.alloc(0));
 const cd = Buffer.concat(central), end = Buffer.alloc(22);
 end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
 end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
@@ -39,6 +40,5 @@ end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
 fs.mkdirSync(SITE, { recursive: true });
 const zipPath = path.join(SITE, TOP + '.zip');
 fs.writeFileSync(zipPath, Buffer.concat([...parts, cd, end]));
-const version = (process.env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7);
 fs.writeFileSync(path.join(SITE, 'version.json'), JSON.stringify({ commit: version, builtAt: new Date().toISOString(), files: files.length, bytes: fs.statSync(zipPath).size }, null, 2));
 console.log(`Built ${zipPath} (${files.length} files, commit ${version})`);

@@ -11,7 +11,7 @@ const CURRENT_COLS = [
   ['Step First Seen', 'firstSeen', 16], ['Days at Step', 'days', 12], ['Change This Run', 'change', 22], ['Last Checked', 'lastChecked', 20], ['Result', 'result', 12], ['Reason / Notes', 'reason', 50]
 ];
 const HISTORY_COLS = [['PR Number', 22], ['Detected On', 14], ['Detected At', 12], ['Event', 24], ['Phase', 22], ['Sub Phase', 24], ['Step', 44], ['Step Status', 14], ['Owner', 20], ['Previous Step', 44], ['Previous Status', 14], ['Run ID', 20]];
-const RUNLOG_COLS = [['Run ID', 20], ['Started', 20], ['Finished', 20], ['Input File', 36], ['PRs Checked', 12], ['Success', 10], ['Not Found', 11], ['Error', 8], ['New / Changed', 14], ['Run Status', 12]];
+const RUNLOG_COLS = [['Run ID', 20], ['Started', 20], ['Finished', 20], ['Input File', 36], ['PRs Checked', 12], ['Success', 10], ['Not Found', 11], ['Error', 8], ['New / Changed', 14], ['Run Status', 12], ['App Version', 12]];
 
 const pad = n => String(n).padStart(2, '0');
 const localDateOnlyUtc = d => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));   // Excel date at midnight, no timezone drift

@@ -20,6 +20,7 @@ const DEFAULTS = {
   pauseBetweenRowsMs: 1500,
   keepDebugDays: 14
 };
+const APP_VERSION = (() => { try { return fs.readFileSync(path.join(__dirname, 'VERSION.txt'), 'utf8').trim() || 'dev'; } catch { return 'dev'; } })();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function loadConfig() {
@@ -320,7 +321,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       await persist(state);
       if (i < numbers.length - 1 && !job.stop) await sleep(cfg.pauseBetweenRowsMs);
     }
-    state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done']);
+    state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done', APP_VERSION]);
     await persist(state);
     job.changed = changed;
   }
@@ -355,4 +356,4 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
   };
 }
 
-module.exports = { createLookup, valueForLabels, pickCurrentStep, tasksFn, loadConfig };
+module.exports = { APP_VERSION, createLookup, valueForLabels, pickCurrentStep, tasksFn, loadConfig };
