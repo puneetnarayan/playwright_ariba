@@ -3,7 +3,8 @@
   "search": {
     "inputSelector": "#_3fjlgc",
     "buttonSelector": "#_poi6_b",
-    "pressEnterInstead": false
+    "pressEnterInstead": false,
+    "alternates": [{ "inputSelector": "#_vyefjc", "buttonSelector": "#_j3mm5" }]
   },
   "result": {
     "linkSelector": "",

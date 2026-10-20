@@ -8,7 +8,7 @@ const tracker = require('./tracker');
 
 const CONFIG_FILE = path.join(__dirname, 'lookup-config.json');
 const DEFAULTS = {
-  search: { inputSelector: '', buttonSelector: '', pressEnterInstead: false },
+  search: { inputSelector: '', buttonSelector: '', pressEnterInstead: false, alternates: [] },
   result: { linkSelector: '', noResultText: 'Search Result\\s+0\\s+project|No (results|items) found' },
   project: {
     phaseLabels: ['Current Phase'], subPhaseLabels: ['Sub Phase'],
@@ -87,16 +87,6 @@ function pickCurrentStep(rows, pc) {
   return pool.length ? { step: pool[0].name, stepStatus: pool[0].status, owner: pool[0].owner, others: '', note: 'No step started yet' } : null;
 }
 
-// Ariba keeps every screen on the same path and tells them apart by session state; the home/search screen is the same path with the session key kept.
-function homeUrlFrom(url) {
-  try {
-    const u = new URL(url);
-    const key = u.searchParams.get('awssk'), realm = u.searchParams.get('realm');
-    if (!/\/Sourcing\/Main\/aw/i.test(u.pathname) || !key) return null;
-    return u.origin + u.pathname + '?awh=r&awssk=' + encodeURIComponent(key) + (realm ? '&realm=' + encodeURIComponent(realm) : '') + '&dard=1';
-  } catch { return null; }
-}
-
 function createLookup({ getPage, isRecording, resultsDir, readRows }) {
   const trackerFile = path.join(resultsDir, 'PR_Status_Tracker.xlsx');
   const debugRoot = path.join(resultsDir, 'debug');
@@ -140,7 +130,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       const base = path.join(debugRoot, runId, number.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40));
       fs.mkdirSync(path.dirname(base), { recursive: true });
       await page.screenshot({ path: base + '.jpg', type: 'jpeg', quality: 55, timeout: 8000 }).catch(() => {});
-      fs.writeFileSync(base + '.txt', '[' + why + ']\n' + (await visibleText(page)).slice(0, 60000));
+      fs.writeFileSync(base + '.txt', '[' + why + ']\nURL: ' + page.url().replace(/awssk=[^&#]*/, 'awssk=REDACTED') + '\nTitle: ' + (await page.title().catch(() => '')) + '\n\n' + (await visibleText(page)).slice(0, 60000));
     } catch { /* debug is best effort */ }
   }
   function cleanOldDebug(days) {
@@ -150,43 +140,69 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     } catch { /* nothing to clean */ }
   }
 
+  // The first search box is on the Sourcing home page; the results page has its own search box. Either one will do.
+  const searchPairs = cfg => [{ input: cfg.search.inputSelector, button: cfg.search.buttonSelector }, ...(cfg.search.alternates || []).map(a => ({ input: a.inputSelector, button: a.buttonSelector }))];
+  async function waitPair(page, cfg, ms) {
+    const until = Date.now() + ms;
+    do {
+      for (const p of searchPairs(cfg)) { if (await page.locator(p.input).first().isVisible().catch(() => false)) return p; }
+      await sleep(400);
+    } while (Date.now() < until);
+    return null;
+  }
+  // Gets the browser to a page with a search box: current page, then the HOME link, then browser Back, then the start URL.
+  async function reachSearch(page, cfg, startUrl) {
+    let pair = await waitPair(page, cfg, 2500);
+    if (pair) return pair;
+    const home = page.locator('a', { hasText: /^\s*HOME\s*$/ }).first();
+    if (await home.count().catch(() => 0)) {
+      await home.click({ timeout: 5000 }).catch(() => {});
+      await settle(page, cfg);
+      if ((pair = await waitPair(page, cfg, 6000))) return pair;
+    }
+    for (let i = 0; i < 4; i++) {
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
+      await settle(page, cfg);
+      if ((pair = await waitPair(page, cfg, 4000))) return pair;
+    }
+    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
+    await settle(page, cfg);
+    if ((pair = await waitPair(page, cfg, cfg.timeouts.searchMs))) return pair;
+    throw new Error('Could not get back to a Ariba search box (tried the HOME link, browser Back and the start URL). Start the run from the Sourcing home page.');
+  }
+
   // Search one number and read the project page. Returns {kind:'ok'|'not_found'|'error', ...}.
   async function lookupOne(number, cfg, startUrl) {
     let page = getPage();
     if (!page || page.isClosed()) throw new Error('The Playwright browser window was closed.');
-    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
-    await settle(page, cfg);
     if (await onLoginPage(page)) {
       if (!(await waitForLogin(cfg))) throw new Error('Session expired and login was not completed in time.');
       page = getPage();
-      await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
-      await settle(page, cfg);
     }
-    const input = page.locator(cfg.search.inputSelector).first();
-    try { await input.waitFor({ state: 'visible', timeout: cfg.timeouts.searchMs }); }
-    catch { throw new Error('Search box not found (' + cfg.search.inputSelector + '). Start the run while the browser is on the Ariba Sourcing home/search page.'); }
+    const pair = await reachSearch(page, cfg, startUrl);
+    page = getPage();
+    const input = page.locator(pair.input).first();
     await input.fill(number);
     if (cfg.search.pressEnterInstead) await input.press('Enter');
-    else await page.locator(cfg.search.buttonSelector).first().click({ timeout: cfg.timeouts.searchMs });
+    else await page.locator(pair.button).first().click({ timeout: cfg.timeouts.searchMs });
     await settle(page, cfg);
 
     const linkLoc = cfg.result.linkSelector ? page.locator(cfg.result.linkSelector) : page.locator('a', { hasText: number });
     const noResult = new RegExp(cfg.result.noResultText, 'i');
     const deadline = Date.now() + cfg.timeouts.pageMs;
-    let count = 0;
+    let count = 0, texts = [], exact = -1;
     while (Date.now() < deadline) {
-      count = await linkLoc.count(); if (count) break;
+      count = await linkLoc.count();
+      if (count) { texts = await linkLoc.allInnerTexts(); exact = texts.findIndex(t => t.trim().startsWith(number)); if (exact >= 0 || cfg.result.linkSelector) break; }
       const body = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
       if (noResult.test(body)) return { kind: 'not_found', reason: 'The portal search returned no project for this number' };
       await sleep(500);
     }
     if (!count) return { kind: 'not_found', reason: 'No result link appeared for this number' };
+    if (exact < 0 && !cfg.result.linkSelector) return { kind: 'error', reason: 'Search ran but no result title starts with ' + number };
 
-    let pick = 0, note = '';
-    const texts = await linkLoc.allInnerTexts();
-    const exact = texts.findIndex(t => t.trim().startsWith(number));
-    if (exact >= 0) pick = exact; else if (count > 1) note = 'No result title starts with the number; used the first of ' + count;
-    if (count > 1 && exact >= 0) note = count + ' results; used the one starting with the number';
+    const pick = Math.max(exact, 0);
+    const note = count > 1 ? count + ' links mention the number; used the one whose title starts with it' : '';
     const linkTitle = (texts[pick] || '').replace(/\s+/g, ' ').trim();
     await linkLoc.nth(pick).click({ timeout: cfg.timeouts.pageMs });
     await settle(page, cfg);
@@ -194,22 +210,29 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
 
     for (const step of cfg.afterOpen || []) {
       if (!step.clickText) continue;
-      try { await page.getByText(step.clickText, { exact: false }).first().click({ timeout: 8000 }); await settle(page, cfg); } catch { note += (note ? '; ' : '') + 'could not open "' + step.clickText + '"'; }
+      try { await page.getByText(step.clickText, { exact: false }).first().click({ timeout: 8000 }); await settle(page, cfg); } catch { /* optional step */ }
     }
 
-    // Wait for the project page to render its task list.
-    let best = { rows: [] };
-    const until = Date.now() + cfg.timeouts.pageMs;
-    while (Date.now() < until) {
-      for (const f of page.frames()) {
-        try { const r = await f.evaluate(tasksFn); if (r.rows.length > best.rows.length) best = r; } catch { /* frame navigating */ }
+    // Wait for the project page to render its task list; if it never does, try the Tasks tab once.
+    const readTasks = async ms => {
+      let best = { rows: [] };
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        for (const f of page.frames()) {
+          try { const r = await f.evaluate(tasksFn); if (r.rows.length > best.rows.length) best = r; } catch { /* frame navigating */ }
+        }
+        if (best.rows.length) break;
+        await sleep(700);
       }
-      if (best.rows.length) break;
-      await sleep(700);
+      return best;
+    };
+    let best = await readTasks(cfg.timeouts.pageMs);
+    if (!best.rows.length) {
+      try { await page.getByText('Tasks', { exact: true }).first().click({ timeout: 4000 }); await settle(page, cfg); best = await readTasks(10000); } catch { /* no Tasks tab */ }
     }
     const lines = (await visibleText(page)).split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
     const step = pickCurrentStep(best.rows, cfg.project);
-    if (!step) return { kind: 'error', reason: 'Project opened but no task list was found on the page' };
+    if (!step) return { kind: 'error', reason: 'Clicked the result but no task list (Name / Owner / Status) was found on the page that opened' };
     const idLine = lines.find(l => /^ID\s+\S+$/.test(l));
     return {
       kind: 'ok', title: lines.find(l => l.startsWith(number + '-')) || linkTitle, projectId: idLine ? idLine.replace(/^ID\s+/, '') : '',
@@ -222,16 +245,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     const cfg = loadConfig();
     const numbers = opts.numbers;
     const page = getPage();
-    let startUrl = page.url();
-    // The run must start from the Sourcing search page. If the browser was left on a project page (e.g. after a previous run), go back to the home page.
-    if (!(await page.locator(cfg.search.inputSelector).first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false))) {
-      const home = homeUrlFrom(startUrl);
-      if (home) {
-        await page.goto(home, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
-        await settle(page, cfg);
-        if (await page.locator(cfg.search.inputSelector).first().waitFor({ state: 'visible', timeout: cfg.timeouts.searchMs }).then(() => true, () => false)) startUrl = home;
-      }
-    }
+    const startUrl = page.url();
     const now = new Date();
     const runId = tracker.localStamp(now).replace(/[ :]/g, '-');
     cleanOldDebug(cfg.keepDebugDays);
@@ -261,9 +275,6 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done']);
     await persist(state);
     job.changed = changed;
-    // Leave the browser on the search page so the next run can start right away.
-    const end = getPage();
-    if (end && !end.isClosed()) await end.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
   }
 
   async function persist(state) {
