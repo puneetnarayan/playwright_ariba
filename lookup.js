@@ -151,24 +151,31 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     } while (Date.now() < until);
     return null;
   }
-  // Gets the browser to a page with a search box: current page, then the HOME link, then browser Back, then the start URL.
+  // Gets the browser to a page with a search box. Prefers the Sourcing home page box; the results-page box is the fallback.
+  // Order: current page, HOME link, browser Back (up to 5 times, looking for the home box), start URL.
   async function reachSearch(page, cfg, startUrl) {
-    let pair = await waitPair(page, cfg, 2500);
-    if (pair) return pair;
+    const primary = searchPairs(cfg)[0];
+    const onPrimary = async ms => { const u = Date.now() + ms; do { if (await page.locator(primary.input).first().isVisible().catch(() => false)) return true; await sleep(400); } while (Date.now() < u); return false; };
+    if (await onPrimary(2500)) return primary;
     const home = page.locator('a', { hasText: /^\s*HOME\s*$/ }).first();
     if (await home.count().catch(() => 0)) {
       await home.click({ timeout: 5000 }).catch(() => {});
       await settle(page, cfg);
-      if ((pair = await waitPair(page, cfg, cfg.timeouts.navMs))) return pair;
+      if (await onPrimary(cfg.timeouts.navMs)) return primary;
     }
-    for (let i = 0; i < 4; i++) {
+    let fallback = await waitPair(page, cfg, 500);
+    for (let i = 0; i < 5; i++) {
       await page.goBack({ waitUntil: 'domcontentloaded', timeout: cfg.timeouts.navMs }).catch(() => {});
       await settle(page, cfg);
-      if ((pair = await waitPair(page, cfg, cfg.timeouts.navMs))) return pair;
+      if (await onPrimary(10000)) return primary;
+      fallback = fallback || (await waitPair(page, cfg, 500));
+      if (fallback && i >= 1) break;   // two steps back and still no home box: use the results-page box
     }
     await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
     await settle(page, cfg);
-    if ((pair = await waitPair(page, cfg, cfg.timeouts.componentMs))) return pair;
+    if (await onPrimary(cfg.timeouts.navMs)) return primary;
+    const any = (await waitPair(page, cfg, cfg.timeouts.componentMs)) || fallback;
+    if (any) return any;
     throw new Error('Could not get back to a Ariba search box (tried the HOME link, browser Back and the start URL). Start the run from the Sourcing home page.');
   }
 
@@ -184,6 +191,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     const pair = await reachSearch(page, cfg, startUrl);
     page = getPage();
     const input = page.locator(pair.input).first();
+    await page.keyboard.press('Escape').catch(() => {});   // close any menu left open
     await input.fill(number);
     await page.evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {});   // vanishes when the page is rebuilt
     if (cfg.search.pressEnterInstead) await input.press('Enter');
@@ -196,7 +204,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     // Wait as long as it takes for the result link to appear. "0 projects found" only counts once the page has been rebuilt
     // (or after a short grace period), so a leftover message from the previous search is never mistaken for this one.
     const t0 = Date.now(), deadline = t0 + cfg.timeouts.componentMs;
-    let count = 0, texts = [], exact = -1;
+    let count = 0, texts = [], exact = -1, kicks = 0;
     while (Date.now() < deadline) {
       count = await linkLoc.count().catch(() => 0);
       if (count) { texts = await linkLoc.allInnerTexts().catch(() => []); exact = texts.findIndex(t => t.trim().startsWith(number)); if (exact >= 0 || cfg.result.linkSelector) break; }
@@ -204,6 +212,13 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       if (noResult.test(body)) {
         const rebuilt = await page.evaluate(() => !document.documentElement.hasAttribute('data-pr-stale')).catch(() => true);
         if (rebuilt || Date.now() - t0 > 8000) return { kind: 'not_found', reason: 'The portal search returned no project for this number' };
+      }
+      // If the page was never rebuilt the search probably did not start: press Enter, then click Search again.
+      const waited = Date.now() - t0;
+      if (kicks < 2 && waited > (kicks ? 35000 : 15000) && !count && await page.evaluate(() => document.documentElement.hasAttribute('data-pr-stale')).catch(() => false)) {
+        kicks++;
+        phase('search did not start - trying again');
+        if (kicks === 1) await input.press('Enter').catch(() => {}); else await page.locator(pair.button).first().click({ timeout: 5000 }).catch(() => {});
       }
       await sleep(500);
     }
@@ -213,8 +228,31 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     const pick = Math.max(exact, 0);
     const note = count > 1 ? count + ' links mention the number; used the one whose title starts with it' : '';
     const linkTitle = (texts[pick] || '').replace(/\s+/g, ' ').trim();
-    phase('opening the project - waiting for its task list');
-    await linkLoc.nth(pick).click({ timeout: cfg.timeouts.navMs });
+    phase('opening the project');
+    // In Ariba the title (or the arrow next to it) opens a small menu; "Open" in that menu opens the project.
+    const titleLink = linkLoc.nth(pick);
+    const quickTasks = async () => { for (const f of getPage().frames()) { try { if ((await f.evaluate(tasksFn)).rows.length) return true; } catch { /* navigating */ } } return false; };
+    const menuOpen = () => getPage().locator('a[role="menuitem"]:visible', { hasText: /^\s*Open\s*$/ }).first();
+    const waitMenuOrProject = async ms => {
+      const u = Date.now() + ms;
+      while (Date.now() < u) {
+        if (await menuOpen().isVisible().catch(() => false)) return 'menu';
+        if (await quickTasks()) return 'project';
+        await sleep(400);
+      }
+      return '';
+    };
+    await titleLink.click({ timeout: cfg.timeouts.navMs });
+    let got = await waitMenuOrProject(8000);
+    if (!got) {   // nothing happened: try the little arrow in the same row
+      try {
+        const arrows = titleLink.locator('xpath=ancestor::tr[1]').locator('a');
+        for (let k = 0; k < await arrows.count(); k++) { if (!(((await arrows.nth(k).innerText().catch(() => 'x')) || '').trim())) { await arrows.nth(k).click({ timeout: 5000 }); break; } }
+      } catch { /* no arrow */ }
+      got = await waitMenuOrProject(8000);
+    }
+    if (got === 'menu') { phase('opening the project - clicking Open'); await menuOpen().click({ timeout: cfg.timeouts.navMs }).catch(() => {}); }
+    phase('waiting for the project task list');
     await settle(page, cfg);
     page = getPage();
 
