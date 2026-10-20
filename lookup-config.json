@@ -18,7 +18,7 @@
     "doneStatuses": ["Complete", "Completed", "Reviewed"]
   },
   "afterOpen": [],
-  "timeouts": { "searchMs": 20000, "pageMs": 20000, "loginWaitMinutes": 10 },
+  "timeouts": { "searchMs": 20000, "pageMs": 30000, "navMs": 30000, "componentMs": 120000, "loginWaitMinutes": 10 },
   "pauseBetweenRowsMs": 1500,
   "keepDebugDays": 14
 }

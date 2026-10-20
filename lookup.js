@@ -16,7 +16,7 @@ const DEFAULTS = {
     inProgressStatuses: ['In Progress'], doneStatuses: ['Complete', 'Completed', 'Reviewed']
   },
   afterOpen: [],
-  timeouts: { searchMs: 20000, pageMs: 20000, loginWaitMinutes: 10 },
+  timeouts: { searchMs: 20000, pageMs: 30000, navMs: 30000, componentMs: 120000, loginWaitMinutes: 10 },
   pauseBetweenRowsMs: 1500,
   keepDebugDays: 14
 };
@@ -107,10 +107,11 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     return false;
   };
   const settle = async (page, cfg) => {
-    await page.waitForLoadState('domcontentloaded', { timeout: cfg.timeouts.pageMs }).catch(() => {});
-    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
-    await sleep(800);
+    // Only a short breather here; the real wait is always for the specific component the next step needs.
+    await page.waitForLoadState('domcontentloaded', { timeout: cfg.timeouts.navMs }).catch(() => {});
+    await sleep(400);
   };
+  const phase = text => { if (job) job.phase = text; };
 
   async function waitForLogin(cfg) {
     const until = Date.now() + cfg.timeouts.loginWaitMinutes * 60000;
@@ -158,16 +159,16 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     if (await home.count().catch(() => 0)) {
       await home.click({ timeout: 5000 }).catch(() => {});
       await settle(page, cfg);
-      if ((pair = await waitPair(page, cfg, 6000))) return pair;
+      if ((pair = await waitPair(page, cfg, cfg.timeouts.navMs))) return pair;
     }
     for (let i = 0; i < 4; i++) {
-      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: cfg.timeouts.navMs }).catch(() => {});
       await settle(page, cfg);
-      if ((pair = await waitPair(page, cfg, 4000))) return pair;
+      if ((pair = await waitPair(page, cfg, cfg.timeouts.navMs))) return pair;
     }
     await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
     await settle(page, cfg);
-    if ((pair = await waitPair(page, cfg, cfg.timeouts.searchMs))) return pair;
+    if ((pair = await waitPair(page, cfg, cfg.timeouts.componentMs))) return pair;
     throw new Error('Could not get back to a Ariba search box (tried the HOME link, browser Back and the start URL). Start the run from the Sourcing home page.');
   }
 
@@ -179,32 +180,41 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       if (!(await waitForLogin(cfg))) throw new Error('Session expired and login was not completed in time.');
       page = getPage();
     }
+    phase('waiting for the search box');
     const pair = await reachSearch(page, cfg, startUrl);
     page = getPage();
     const input = page.locator(pair.input).first();
     await input.fill(number);
+    await page.evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {});   // vanishes when the page is rebuilt
     if (cfg.search.pressEnterInstead) await input.press('Enter');
     else await page.locator(pair.button).first().click({ timeout: cfg.timeouts.searchMs });
+    phase('searching - waiting for the results');
     await settle(page, cfg);
 
     const linkLoc = cfg.result.linkSelector ? page.locator(cfg.result.linkSelector) : page.locator('a', { hasText: number });
     const noResult = new RegExp(cfg.result.noResultText, 'i');
-    const deadline = Date.now() + cfg.timeouts.pageMs;
+    // Wait as long as it takes for the result link to appear. "0 projects found" only counts once the page has been rebuilt
+    // (or after a short grace period), so a leftover message from the previous search is never mistaken for this one.
+    const t0 = Date.now(), deadline = t0 + cfg.timeouts.componentMs;
     let count = 0, texts = [], exact = -1;
     while (Date.now() < deadline) {
-      count = await linkLoc.count();
-      if (count) { texts = await linkLoc.allInnerTexts(); exact = texts.findIndex(t => t.trim().startsWith(number)); if (exact >= 0 || cfg.result.linkSelector) break; }
+      count = await linkLoc.count().catch(() => 0);
+      if (count) { texts = await linkLoc.allInnerTexts().catch(() => []); exact = texts.findIndex(t => t.trim().startsWith(number)); if (exact >= 0 || cfg.result.linkSelector) break; }
       const body = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
-      if (noResult.test(body)) return { kind: 'not_found', reason: 'The portal search returned no project for this number' };
+      if (noResult.test(body)) {
+        const rebuilt = await page.evaluate(() => !document.documentElement.hasAttribute('data-pr-stale')).catch(() => true);
+        if (rebuilt || Date.now() - t0 > 8000) return { kind: 'not_found', reason: 'The portal search returned no project for this number' };
+      }
       await sleep(500);
     }
-    if (!count) return { kind: 'not_found', reason: 'No result link appeared for this number' };
+    if (!count) return { kind: 'error', reason: 'The search results did not appear within ' + Math.round(cfg.timeouts.componentMs / 1000) + ' seconds (portal slow?)' };
     if (exact < 0 && !cfg.result.linkSelector) return { kind: 'error', reason: 'Search ran but no result title starts with ' + number };
 
     const pick = Math.max(exact, 0);
     const note = count > 1 ? count + ' links mention the number; used the one whose title starts with it' : '';
     const linkTitle = (texts[pick] || '').replace(/\s+/g, ' ').trim();
-    await linkLoc.nth(pick).click({ timeout: cfg.timeouts.pageMs });
+    phase('opening the project - waiting for its task list');
+    await linkLoc.nth(pick).click({ timeout: cfg.timeouts.navMs });
     await settle(page, cfg);
     page = getPage();
 
@@ -226,9 +236,9 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       }
       return best;
     };
-    let best = await readTasks(cfg.timeouts.pageMs);
+    let best = await readTasks(cfg.timeouts.componentMs);
     if (!best.rows.length) {
-      try { await page.getByText('Tasks', { exact: true }).first().click({ timeout: 4000 }); await settle(page, cfg); best = await readTasks(10000); } catch { /* no Tasks tab */ }
+      try { await page.getByText('Tasks', { exact: true }).first().click({ timeout: 4000 }); await settle(page, cfg); best = await readTasks(cfg.timeouts.navMs); } catch { /* no Tasks tab */ }
     }
     const lines = (await visibleText(page)).split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
     const step = pickCurrentStep(best.rows, cfg.project);
@@ -256,7 +266,7 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     const counts = { SUCCESS: 0, NOT_FOUND: 0, ERROR: 0 };
     for (let i = 0; i < numbers.length && !job.stop; i++) {
       const number = numbers[i];
-      job.current = number; job.index = i + 1;
+      job.current = number; job.index = i + 1; phase('starting');
       let outcome;
       try { outcome = await lookupOne(number, cfg, startUrl); }
       catch (e) { outcome = { kind: 'error', reason: String(e.message || e).split('\n')[0].slice(0, 300) }; }
