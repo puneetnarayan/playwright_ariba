@@ -1,97 +1,75 @@
-// Read-only PR status lookup. For every PR number in the uploaded workbook it searches the portal in the
-// already-logged-in Playwright page, opens the project, reads the task list and works out the current step.
-// Results go into one persistent tracker workbook (current status + history of step changes + run log).
-// It only types in the search box and clicks the search button and the result link.
+// Replays a recorded workflow for every PR number in the uploaded workbook (read-only) and writes the captured data
+// into the tracker workbook. Every step waits for its own component to appear before acting; nothing is clicked
+// blindly and a missing component fails that row (red) while the run carries on with the next PR.
 const fs = require('fs');
 const path = require('path');
 const tracker = require('./tracker');
+const { PR_TOKEN } = require('./workflow');
 
 const CONFIG_FILE = path.join(__dirname, 'lookup-config.json');
-const DEFAULTS = {
-  search: { inputSelector: '', buttonSelector: '', pressEnterInstead: false, alternates: [] },
-  result: { linkSelector: '', noResultText: 'Search Result\\s+0\\s+project|No (results|items) found' },
-  project: {
-    phaseLabels: ['Current Phase'], subPhaseLabels: ['Sub Phase'],
-    taskNamePattern: '^[A-Za-z0-9]{1,3}[.)]\\s*\\S',
-    inProgressStatuses: ['In Progress'], doneStatuses: ['Complete', 'Completed', 'Reviewed']
-  },
-  afterOpen: [],
-  timeouts: { searchMs: 20000, pageMs: 30000, navMs: 30000, componentMs: 120000, loginWaitMinutes: 10 },
-  pauseBetweenRowsMs: 1500,
-  keepDebugDays: 14
-};
 const APP_VERSION = (() => { try { return fs.readFileSync(path.join(__dirname, 'VERSION.txt'), 'utf8').trim() || 'dev'; } catch { return 'dev'; } })();
+const DEFAULTS = { timeouts: { navMs: 30000, componentMs: 120000, optionalMs: 8000, noMatchMs: 15000, loginWaitMinutes: 10 }, pauseBetweenRowsMs: 1500, keepDebugDays: 14 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function loadConfig() {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) { throw new Error('Could not read lookup-config.json: ' + e.message); }
-  const merged = {};
-  for (const k of Object.keys(DEFAULTS)) {
-    const d = DEFAULTS[k], u = user[k];
-    merged[k] = d && typeof d === 'object' && !Array.isArray(d) ? { ...d, ...(u || {}) } : (u === undefined ? d : u);
-  }
-  return merged;
+  return { timeouts: { ...DEFAULTS.timeouts, ...(user.timeouts || {}) }, pauseBetweenRowsMs: user.pauseBetweenRowsMs ?? DEFAULTS.pauseBetweenRowsMs, keepDebugDays: user.keepDebugDays ?? DEFAULTS.keepDebugDays };
 }
 
-// Pull "Label: value" (or "Label" followed by a value line) out of visible text lines.
-function valueForLabels(lines, labels) {
-  for (const label of labels) {
-    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const inline = new RegExp('^' + esc + '\\s*[:\\-]\\s*(.+)$', 'i');
-    for (let i = 0; i < lines.length; i++) {
-      const im = lines[i].match(inline);
-      if (im && im[1].trim()) return im[1].trim();
-      if (lines[i].replace(/\s*[:\-]$/, '').toLowerCase() === label.toLowerCase()) {
-        for (let j = i + 1; j < Math.min(lines.length, i + 4); j++) if (lines[j].trim()) return lines[j].trim();
-      }
-    }
-  }
-  return null;
-}
-
-// Runs inside the page (and every frame): reads the project task table (Name / Owner / Status columns).
-const tasksFn = () => {
+// Runs inside the page (and every frame): reads data by a capture rule. Returns {state:'ok'|'wait'|'nomatch', values}.
+const readFn = rule => {
   const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
-  const ST = /^(Not Started|In Progress|Completed?|Reviewed|Pending|On Hold|Overdue|Cancell?ed|Skipped|Waiting)$/i;
-  let idx = null;
-  const rows = [];
-  for (const tr of document.querySelectorAll('tr')) {
-    const cells = Array.from(tr.children).filter(c => /^T[DH]$/.test(c.tagName)).map(c => clean(c.innerText));
-    if (!idx) { const n = cells.indexOf('Name'), s = cells.indexOf('Status'); if (n >= 0 && s >= 0) idx = { name: n, status: s, owner: cells.indexOf('Owner') }; continue; }
-    if (cells.length > idx.status && ST.test(cells[idx.status]) && cells[idx.name] && cells[idx.name].length < 200) {
-      rows.push({ name: cells[idx.name], owner: idx.owner >= 0 ? (cells[idx.owner] || '') : '', status: cells[idx.status] });
+  const cellsOf = tr => Array.from(tr.children).filter(c => /^T[DH]$/.test(c.tagName));
+  if (rule.type === 'label-value') {
+    const want = clean(rule.label).replace(/\s*:\s*$/, '').toLowerCase();
+    for (const tr of document.querySelectorAll('tr')) {
+      const cells = cellsOf(tr).map(c => clean(c.innerText));
+      const idx = cells.findIndex(c => c);
+      if (idx < 0 || cells[idx].replace(/\s*:\s*$/, '').toLowerCase() !== want) continue;
+      const rest = cells.slice(idx + 1).filter(Boolean);
+      if (rest.length) return { state: 'ok', values: [rest[0]] };
     }
+    const lines = (document.body ? document.body.innerText : '').split('\n').map(clean).filter(Boolean);
+    const re = new RegExp('^' + want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:\\-]\\s*(.+)$', 'i');
+    for (const l of lines) { const m = l.match(re); if (m) return { state: 'ok', values: [m[1]] }; }
+    return { state: 'wait' };
   }
-  return { header: !!idx, rows };
+  if (rule.type === 'row-by-status') {
+    const need = (rule.headers || []).map(h => h.toLowerCase());
+    const pat = rule.namePattern ? new RegExp(rule.namePattern) : null;
+    const statusHeader = String(rule.statusHeader || 'Status').toLowerCase();
+    let hdr = null, dataRows = 0;
+    const matches = [];
+    for (const tr of document.querySelectorAll('tr')) {
+      const cells = cellsOf(tr).map(c => clean(c.innerText));
+      const low = cells.map(c => c.toLowerCase());
+      if (cells.filter(Boolean).length >= 2 && need.length && need.every(h => low.includes(h))) { hdr = cells; continue; }
+      if (!hdr) continue;
+      const sIdx = hdr.findIndex(h => h.toLowerCase() === statusHeader);
+      if (sIdx < 0 || cells.length <= sIdx || !cells[sIdx]) continue;
+      dataRows++;
+      if (cells[sIdx].toLowerCase() !== String(rule.status).toLowerCase()) continue;
+      const idxs = (rule.colHeaders || []).map((h, k) => { const byName = h ? hdr.findIndex(x => x === h) : -1; return byName >= 0 ? byName : (rule.cols || [])[k]; });
+      if (pat && !pat.test(cells[idxs[0]] || '')) continue;
+      matches.push(idxs.map(i => cells[i] || ''));
+    }
+    if (!hdr || !dataRows) return { state: 'wait' };
+    if (!matches.length) return { state: 'nomatch' };
+    return { state: 'ok', values: matches[matches.length - 1], count: matches.length };
+  }
+  let el = null;
+  for (const sel of [rule.selector, rule.cssPath]) { if (!sel || el) continue; try { el = document.querySelector(sel); } catch { /* bad selector */ } }
+  const t = el ? clean(el.innerText) : '';
+  return t ? { state: 'ok', values: [t] } : { state: 'wait' };
 };
 
-// Decides the current step from the task rows. Returns {step, stepStatus, owner, others, note} or null.
-function pickCurrentStep(rows, pc) {
-  const seen = new Set(), list = [];
-  for (const r of rows) { const k = r.name + '|' + r.owner + '|' + r.status; if (!seen.has(k)) { seen.add(k); list.push(r); } }
-  const isTask = new RegExp(pc.taskNamePattern);
-  const lc = a => a.map(x => x.toLowerCase());
-  const inProg = lc(pc.inProgressStatuses), done = lc(pc.doneStatuses);
-  const tasks = list.filter(r => isTask.test(r.name));
-  const pool = tasks.length ? tasks : list;
-  const running = pool.filter(r => inProg.includes(r.status.toLowerCase()));
-  if (running.length) {
-    const cur = running[running.length - 1];
-    return { step: cur.name, stepStatus: cur.status, owner: cur.owner, others: running.slice(0, -1).map(r => r.name).join(' | '), note: '' };
-  }
-  const finished = pool.filter(r => done.includes(r.status.toLowerCase()));
-  if (finished.length) {
-    const cur = finished[finished.length - 1];
-    return { step: cur.name, stepStatus: cur.status, owner: cur.owner, others: '', note: 'No step in progress; showing the last finished step' };
-  }
-  return pool.length ? { step: pool[0].name, stepStatus: pool[0].status, owner: pool[0].owner, others: '', note: 'No step started yet' } : null;
-}
-
-function createLookup({ getPage, isRecording, resultsDir, readRows }) {
+function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
   const trackerFile = path.join(resultsDir, 'PR_Status_Tracker.xlsx');
   const debugRoot = path.join(resultsDir, 'debug');
   let job = null;
+  const phase = text => { if (job) job.phase = text; };
 
   async function visibleText(page) {
     const chunks = [];
@@ -112,8 +90,6 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     await page.waitForLoadState('domcontentloaded', { timeout: cfg.timeouts.navMs }).catch(() => {});
     await sleep(400);
   };
-  const phase = text => { if (job) job.phase = text; };
-
   async function waitForLogin(cfg) {
     const until = Date.now() + cfg.timeouts.loginWaitMinutes * 60000;
     job.state = 'waiting-login';
@@ -125,7 +101,6 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     }
     return false;
   }
-
   async function saveDebug(runId, number, why) {
     try {
       const page = getPage(); if (!page || page.isClosed()) return;
@@ -142,163 +117,182 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
     } catch { /* nothing to clean */ }
   }
 
-  // The first search box is on the Sourcing home page; the results page has its own search box. Either one will do.
-  const searchPairs = cfg => [{ input: cfg.search.inputSelector, button: cfg.search.buttonSelector }, ...(cfg.search.alternates || []).map(a => ({ input: a.inputSelector, button: a.buttonSelector }))];
-  async function waitPair(page, cfg, ms) {
-    const until = Date.now() + ms;
-    do {
-      for (const p of searchPairs(cfg)) { if (await page.locator(p.input).first().isVisible().catch(() => false)) return p; }
-      await sleep(400);
-    } while (Date.now() < until);
+  // ---- locating recorded components ----
+  const subst = (s, number) => String(s || '').split(PR_TOKEN).join(number);
+  function textRegex(text, match) {
+    const t = String(text).trim();
+    const truncated = /(\.\.\.|…)$/.test(t);
+    const core = t.replace(/(\.\.\.|…)$/, '').trim();
+    return new RegExp('^\\s*' + esc(core) + (truncated || match === 'prefix' ? '' : '\\s*$'), 'i');
+  }
+  // Candidate ways to find a recorded target: by id (when its text still fits), by tag/role/text, by recorded css path.
+  function candidates(target, number) {
+    const out = [];
+    const text = subst(target.text, number).trim();
+    const re = text ? textRegex(text, target.match) : null;
+    const tag = (target.tag || '*').toLowerCase();
+    const tagSel = tag + (target.role ? '[role="' + target.role + '"]' : '');
+    if (target.selector && target.selector.startsWith('#')) out.push({ make: f => f.locator(target.selector), verify: re });
+    if (re) out.push({ make: f => f.locator(tagSel + ':visible').filter({ hasText: re }), verify: null });
+    if (target.cssPath) out.push({ make: f => f.locator(target.cssPath), verify: re });
+    return out;
+  }
+  async function findNow(page, target, number) {
+    const cands = candidates(target, number);
+    if (!cands.length) return null;
+    for (const f of page.frames()) {
+      for (const c of cands) {
+        try {
+          const loc = c.make(f).first();
+          if (!(await loc.isVisible().catch(() => false))) continue;
+          if (c.verify && !c.verify.test(((await loc.innerText().catch(() => '')) || '').replace(/\s+/g, ' '))) continue;
+          return loc;
+        } catch { /* frame navigating */ }
+      }
+    }
     return null;
   }
-  // Gets the browser to a page with a search box. Prefers the Sourcing home page box; the results-page box is the fallback.
-  // Order: current page, HOME link, browser Back (up to 5 times, looking for the home box), start URL.
-  async function reachSearch(page, cfg, startUrl) {
-    const primary = searchPairs(cfg)[0];
-    const onPrimary = async ms => { const u = Date.now() + ms; do { if (await page.locator(primary.input).first().isVisible().catch(() => false)) return true; await sleep(400); } while (Date.now() < u); return false; };
-    if (await onPrimary(2500)) return primary;
-    const home = page.locator('a', { hasText: /^\s*HOME\s*$/ }).first();
-    if (await home.count().catch(() => 0)) {
-      await home.click({ timeout: 5000 }).catch(() => {});
-      await settle(page, cfg);
-      if (await onPrimary(cfg.timeouts.navMs)) return primary;
+  const describe = (target, number) => subst(target.text, number) || target.selector || target.cssPath || target.tag || 'component';
+
+  // Waits for a component. Throws errors with code 'not_found' or 'timeout' that the caller turns into row results.
+  async function waitFor(page, target, number, ms, ctx) {
+    const t0 = Date.now(), until = t0 + ms;
+    let kicks = 0;
+    while (Date.now() < until && !job.stop) {
+      page = getPage();
+      const loc = await findNow(page, target, number);
+      if (loc) return loc;
+      if (ctx.notFoundRe) {
+        const body = await visibleText(page).catch(() => '');
+        if (ctx.notFoundRe.test(body)) {
+          const rebuilt = await page.evaluate(() => !document.documentElement.hasAttribute('data-pr-stale')).catch(() => true);
+          if (rebuilt || Date.now() - t0 > 8000) { const e = new Error('not_found'); e.code = 'not_found'; throw e; }
+        }
+      }
+      // The page was never rebuilt after our last click: it probably did not register. Click it again (twice at most).
+      const waited = Date.now() - t0;
+      if (ctx.retryPrev && kicks < 2 && waited > (kicks ? 35000 : 15000) && await page.evaluate(() => document.documentElement.hasAttribute('data-pr-stale')).catch(() => false)) {
+        kicks++; phase('the page did not react - clicking again');
+        await ctx.retryPrev().catch(() => {});
+      }
+      await sleep(400);
     }
-    let fallback = await waitPair(page, cfg, 500);
-    for (let i = 0; i < 5; i++) {
-      await page.goBack({ waitUntil: 'domcontentloaded', timeout: cfg.timeouts.navMs }).catch(() => {});
-      await settle(page, cfg);
-      if (await onPrimary(10000)) return primary;
-      fallback = fallback || (await waitPair(page, cfg, 500));
-      if (fallback && i >= 1) break;   // two steps back and still no home box: use the results-page box
-    }
-    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.pageMs }).catch(() => {});
-    await settle(page, cfg);
-    if (await onPrimary(cfg.timeouts.navMs)) return primary;
-    const any = (await waitPair(page, cfg, cfg.timeouts.componentMs)) || fallback;
-    if (any) return any;
-    throw new Error('Could not get back to a Ariba search box (tried the HOME link, browser Back and the start URL). Start the run from the Sourcing home page.');
+    const e = new Error('timeout'); e.code = 'timeout'; throw e;
   }
 
-  // Search one number and read the project page. Returns {kind:'ok'|'not_found'|'error', ...}.
-  async function lookupOne(number, cfg, startUrl) {
-    let page = getPage();
-    if (!page || page.isClosed()) throw new Error('The Playwright browser window was closed.');
-    if (await onLoginPage(page)) {
-      if (!(await waitForLogin(cfg))) throw new Error('Session expired and login was not completed in time.');
+  async function readCapture(page, rule, cfg) {
+    const until = Date.now() + cfg.timeouts.componentMs;
+    let nomatchSince = 0;
+    while (Date.now() < until && !job.stop) {
       page = getPage();
+      let sawNoMatch = false;
+      for (const f of page.frames()) {
+        try {
+          const r = await f.evaluate(readFn, rule);
+          if (r.state === 'ok') return r;
+          if (r.state === 'nomatch') sawNoMatch = true;
+        } catch { /* frame navigating */ }
+      }
+      if (sawNoMatch) { nomatchSince = nomatchSince || Date.now(); if (Date.now() - nomatchSince > cfg.timeouts.noMatchMs) return { state: 'nomatch' }; } else nomatchSince = 0;
+      await sleep(600);
     }
-    phase('waiting for the search box');
-    const pair = await reachSearch(page, cfg, startUrl);
-    page = getPage();
-    const input = page.locator(pair.input).first();
-    await page.keyboard.press('Escape').catch(() => {});   // close any menu left open
-    await input.fill(number);
-    await page.evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {});   // vanishes when the page is rebuilt
-    if (cfg.search.pressEnterInstead) await input.press('Enter');
-    else await page.locator(pair.button).first().click({ timeout: cfg.timeouts.searchMs });
-    phase('searching - waiting for the results');
-    await settle(page, cfg);
+    return { state: 'wait' };
+  }
 
-    const linkLoc = cfg.result.linkSelector ? page.locator(cfg.result.linkSelector) : page.locator('a', { hasText: number });
-    const noResult = new RegExp(cfg.result.noResultText, 'i');
-    // Wait as long as it takes for the result link to appear. "0 projects found" only counts once the page has been rebuilt
-    // (or after a short grace period), so a leftover message from the previous search is never mistaken for this one.
-    const t0 = Date.now(), deadline = t0 + cfg.timeouts.componentMs;
-    let count = 0, texts = [], exact = -1, kicks = 0;
-    while (Date.now() < deadline) {
-      count = await linkLoc.count().catch(() => 0);
-      if (count) { texts = await linkLoc.allInnerTexts().catch(() => []); exact = texts.findIndex(t => t.trim().startsWith(number)); if (exact >= 0 || cfg.result.linkSelector) break; }
-      const body = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
-      if (noResult.test(body)) {
-        const rebuilt = await page.evaluate(() => !document.documentElement.hasAttribute('data-pr-stale')).catch(() => true);
-        if (rebuilt || Date.now() - t0 > 8000) return { kind: 'not_found', reason: 'The portal search returned no project for this number' };
-      }
-      // If the page was never rebuilt the search probably did not start: press Enter, then click Search again.
-      const waited = Date.now() - t0;
-      if (kicks < 2 && waited > (kicks ? 35000 : 15000) && !count && await page.evaluate(() => document.documentElement.hasAttribute('data-pr-stale')).catch(() => false)) {
-        kicks++;
-        phase('search did not start - trying again');
-        if (kicks === 1) await input.press('Enter').catch(() => {}); else await page.locator(pair.button).first().click({ timeout: 5000 }).catch(() => {});
-      }
-      await sleep(500);
+  // Gets the browser to the page where the workflow's first step can be done.
+  async function reachStart(first, number, cfg, startUrl) {
+    const visible = async ms => { const u = Date.now() + ms; do { if (await findNow(getPage(), first.target, number)) return true; await sleep(400); } while (Date.now() < u); return false; };
+    await getPage().keyboard.press('Escape').catch(() => {});
+    if (await visible(2500)) return;
+    const home = getPage().locator('a', { hasText: /^\s*HOME\s*$/ }).first();
+    if (await home.count().catch(() => 0)) {
+      await home.click({ timeout: 5000 }).catch(() => {});
+      await settle(getPage(), cfg);
+      if (await visible(cfg.timeouts.navMs)) return;
     }
-    if (!count) return { kind: 'error', reason: 'The search results did not appear within ' + Math.round(cfg.timeouts.componentMs / 1000) + ' seconds (portal slow?)' };
-    if (exact < 0 && !cfg.result.linkSelector) return { kind: 'error', reason: 'Search ran but no result title starts with ' + number };
+    for (let i = 0; i < 5; i++) {
+      await getPage().goBack({ waitUntil: 'domcontentloaded', timeout: cfg.timeouts.navMs }).catch(() => {});
+      await settle(getPage(), cfg);
+      if (await visible(10000)) return;
+    }
+    await getPage().goto(startUrl, { waitUntil: 'domcontentloaded', timeout: cfg.timeouts.navMs }).catch(() => {});
+    await settle(getPage(), cfg);
+    if (await visible(cfg.timeouts.componentMs)) return;
+    throw new Error('Could not get back to the page where the recorded steps begin (tried the HOME link, browser Back and the start URL). Start the run on that page.');
+  }
 
-    const pick = Math.max(exact, 0);
-    const note = count > 1 ? count + ' links mention the number; used the one whose title starts with it' : '';
-    const linkTitle = (texts[pick] || '').replace(/\s+/g, ' ').trim();
-    phase('opening the project');
-    // In Ariba the title (or the arrow next to it) opens a small menu; "Open" in that menu opens the project.
-    const titleLink = linkLoc.nth(pick);
-    const quickTasks = async () => { for (const f of getPage().frames()) { try { if ((await f.evaluate(tasksFn)).rows.length) return true; } catch { /* navigating */ } } return false; };
-    const menuOpen = () => getPage().locator('a[role="menuitem"]:visible', { hasText: /^\s*Open\s*$/ }).first();
-    const waitMenuOrProject = async ms => {
-      const u = Date.now() + ms;
-      while (Date.now() < u) {
-        if (await menuOpen().isVisible().catch(() => false)) return 'menu';
-        if (await quickTasks()) return 'project';
-        await sleep(400);
-      }
-      return '';
-    };
-    await titleLink.click({ timeout: cfg.timeouts.navMs });
-    let got = await waitMenuOrProject(8000);
-    if (!got) {   // nothing happened: try the little arrow in the same row
+  // Replays the workflow for one PR number. Returns {kind:'ok'|'not_found'|'error', vals, reason, note}.
+  async function runOne(number, wf, cfg, startUrl) {
+    const steps = wf.steps.filter(s => s.include);
+    const vals = {};
+    const notes = [];
+    const ctx = { notFoundRe: wf.notFoundText ? new RegExp(wf.notFoundText, 'i') : null, retryPrev: null };
+    let page = getPage();
+    if (!page || page.isClosed()) return { kind: 'error', reason: 'The Playwright browser window was closed.' };
+    if (await onLoginPage(page)) {
+      if (!(await waitForLogin(cfg))) return { kind: 'error', reason: 'Session expired and login was not completed in time.' };
+    }
+    const first = steps.find(s => s.kind === 'type' || s.kind === 'click');
+    try {
+      phase('going to the starting page');
+      await reachStart(first, number, cfg, startUrl);
+    } catch (e) { return { kind: 'error', reason: e.message }; }
+
+    let seenNumber = false;
+    for (let i = 0; i < steps.length && !job.stop; i++) {
+      const s = steps[i];
+      const where = 'step ' + (i + 1) + ' of ' + steps.length + ': ' + s.label;
+      phase(where);
+      page = getPage();
       try {
-        const arrows = titleLink.locator('xpath=ancestor::tr[1]').locator('a');
-        for (let k = 0; k < await arrows.count(); k++) { if (!(((await arrows.nth(k).innerText().catch(() => 'x')) || '').trim())) { await arrows.nth(k).click({ timeout: 5000 }); break; } }
-      } catch { /* no arrow */ }
-      got = await waitMenuOrProject(8000);
-    }
-    if (got === 'menu') { phase('opening the project - clicking Open'); await menuOpen().click({ timeout: cfg.timeouts.navMs }).catch(() => {}); }
-    phase('waiting for the project task list');
-    await settle(page, cfg);
-    page = getPage();
-
-    for (const step of cfg.afterOpen || []) {
-      if (!step.clickText) continue;
-      try { await page.getByText(step.clickText, { exact: false }).first().click({ timeout: 8000 }); await settle(page, cfg); } catch { /* optional step */ }
-    }
-
-    // Wait for the project page to render its task list; if it never does, try the Tasks tab once.
-    const readTasks = async ms => {
-      let best = { rows: [] };
-      const until = Date.now() + ms;
-      while (Date.now() < until) {
-        for (const f of page.frames()) {
-          try { const r = await f.evaluate(tasksFn); if (r.rows.length > best.rows.length) best = r; } catch { /* frame navigating */ }
+        if (s.skipIfVisible && await findNow(page, s.skipIfVisible, number)) continue;
+        if (s.kind === 'capture') {
+          const r = await readCapture(page, s.rule, cfg);
+          if (r.state !== 'ok') {
+            const what = (s.columns || []).join(', ');
+            return { kind: 'error', vals, reason: (r.state === 'nomatch' ? 'No row with ' + (s.rule.statusHeader || 'Status') + ' "' + s.rule.status + '" was found for ' : 'The place to read was not found for ') + what + ' (' + where + ')' };
+          }
+          (s.columns || []).forEach((name, k) => { vals[name] = (r.values[k] || '').trim(); });
+          if (r.count > 1) notes.push(r.count + ' rows matched "' + s.rule.status + '"; used the last one');
+          if (!seenNumber) seenNumber = (await visibleText(page)).includes(number);
+          continue;
         }
-        if (best.rows.length) break;
-        await sleep(700);
+        const target = s.target || {};
+        const loc = await waitFor(page, target, number, s.optional ? cfg.timeouts.optionalMs : cfg.timeouts.componentMs, ctx);
+        if (s.kind === 'type') {
+          await loc.fill(subst(s.value, number));
+          ctx.retryPrev = null;
+        } else {
+          await page.evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {});   // vanishes when the page is rebuilt
+          await loc.click({ timeout: cfg.timeouts.navMs });
+          ctx.retryPrev = async () => { const again = await findNow(getPage(), target, number); if (again) await again.click({ timeout: 5000 }); };
+          await settle(page, cfg);
+        }
+      } catch (e) {
+        if (e.code === 'not_found') return { kind: 'not_found', reason: 'The portal reports no result for this number' };
+        if (e.code === 'timeout') {
+          if (s.optional) continue;
+          return { kind: 'error', vals, reason: 'Waited ' + Math.round(cfg.timeouts.componentMs / 1000) + ' seconds for "' + describe(s.target || {}, number) + '" but it did not appear (' + where + ')' };
+        }
+        return { kind: 'error', vals, reason: String(e.message || e).split('\n')[0].slice(0, 300) + ' (' + where + ')' };
       }
-      return best;
-    };
-    let best = await readTasks(cfg.timeouts.componentMs);
-    if (!best.rows.length) {
-      try { await page.getByText('Tasks', { exact: true }).first().click({ timeout: 4000 }); await settle(page, cfg); best = await readTasks(cfg.timeouts.navMs); } catch { /* no Tasks tab */ }
     }
-    const lines = (await visibleText(page)).split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const step = pickCurrentStep(best.rows, cfg.project);
-    if (!step) return { kind: 'error', reason: 'Clicked the result but no task list (Name / Owner / Status) was found on the page that opened' };
-    const idLine = lines.find(l => /^ID\s+\S+$/.test(l));
-    return {
-      kind: 'ok', title: lines.find(l => l.startsWith(number + '-')) || linkTitle, projectId: idLine ? idLine.replace(/^ID\s+/, '') : '',
-      phase: valueForLabels(lines, cfg.project.phaseLabels) || '', subPhase: valueForLabels(lines, cfg.project.subPhaseLabels) || '',
-      ...step, note: [note, step.note].filter(Boolean).join('; ')
-    };
+    if (job.stop) return { kind: 'error', vals, reason: 'Run stopped' };
+    if (wf.verifyNumberOnPage !== false && !seenNumber) return { kind: 'error', vals, reason: 'The number ' + number + ' was not visible on the page where the data was read, so the data may belong to another project' };
+    return { kind: 'ok', vals, note: notes.join('; ') };
   }
 
   async function run(opts) {
     const cfg = loadConfig();
+    const wf = opts.workflow;
+    const cols = wf.steps.filter(s => s.include && s.kind === 'capture').flatMap(s => s.columns || []);
     const numbers = opts.numbers;
-    const page = getPage();
-    const startUrl = page.url();
+    const startUrl = getPage().url();
     const now = new Date();
     const runId = tracker.localStamp(now).replace(/[ :]/g, '-');
     cleanOldDebug(cfg.keepDebugDays);
-    const state = await tracker.load(trackerFile);
+    const state = await tracker.load(trackerFile, cols);
+    if (state.rotatedTo) job.message = 'The data columns changed, so the earlier tracker was kept as ' + state.rotatedTo + ' and a new one was started.';
     job.total = numbers.length; job.trackerFile = path.basename(trackerFile);
     const runInfo = { id: runId, now, today: tracker.localDateOnlyUtc(now), order: 0 };
     let changed = 0;
@@ -307,30 +301,31 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       const number = numbers[i];
       job.current = number; job.index = i + 1; phase('starting');
       let outcome;
-      try { outcome = await lookupOne(number, cfg, startUrl); }
+      try { outcome = await runOne(number, wf, cfg, startUrl); }
       catch (e) { outcome = { kind: 'error', reason: String(e.message || e).split('\n')[0].slice(0, 300) }; }
+      if (job.stop && outcome.kind === 'error' && outcome.reason === 'Run stopped') { job.index = i; break; }
       if (outcome.kind !== 'ok') await saveDebug(runId, number, outcome.kind + ': ' + (outcome.reason || ''));
       runInfo.order = i;
-      const r = tracker.apply(state, number, outcome, runInfo);
+      const r = tracker.apply(state, cols, number, outcome, runInfo);
       if (r.changed) changed++;
       const row = state.current.find(x => x.pr === number);
       counts[row.result]++;
       job.counts = { ...counts };
-      job.recent.push({ number, result: row.result, step: row.step, stepStatus: row.stepStatus, days: row.days, change: row.change, reason: row.reason });
+      job.recent.push({ number, result: row.result, data: cols.map(c => (row.vals && row.vals[c]) || '').filter(Boolean).join(' | '), days: row.days, change: row.change, reason: row.reason });
       job.recent = job.recent.slice(-200);
-      await persist(state);
+      await persist(state, cols);
       if (i < numbers.length - 1 && !job.stop) await sleep(cfg.pauseBetweenRowsMs);
     }
-    state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done', APP_VERSION]);
-    await persist(state);
+    state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done', APP_VERSION, wf.name || '']);
+    await persist(state, cols);
     job.changed = changed;
   }
 
-  async function persist(state) {
-    try { await tracker.save(trackerFile, state); }
+  async function persist(state, cols) {
+    try { await tracker.save(trackerFile, cols, state); }
     catch (e) {
       const alt = trackerFile.replace(/\.xlsx$/, '_' + Date.now() + '.xlsx');
-      await tracker.save(alt, state);
+      await tracker.save(alt, cols, state);
       job.trackerFile = path.basename(alt);
       job.message = 'The tracker was open in Excel, so this run was saved as ' + path.basename(alt) + '. Close Excel and merge or rename it.';
     }
@@ -345,15 +340,16 @@ function createLookup({ getPage, isRecording, resultsDir, readRows }) {
       if (job && (job.state === 'running' || job.state === 'waiting-login')) throw new Error('A lookup run is already active.');
       if (isRecording()) throw new Error('Stop recording before running the lookup.');
       const page = getPage();
-      if (!page || page.isClosed()) throw new Error('Open the portal and log in first, then go to the Sourcing search page.');
+      if (!page || page.isClosed()) throw new Error('Open the portal and log in first, then go to the page where the recorded steps begin.');
       if (!opts.numbers || !opts.numbers.length) throw new Error('No PR numbers were found in the workbook.');
       loadConfig();
-      job = { state: 'running', stop: false, message: '', startedAt: new Date().toISOString(), index: 0, total: 0, current: '', counts: {}, recent: [], trackerFile: '' };
-      run(opts).then(() => { job.state = job.stop ? 'stopped' : 'done'; job.finishedAt = new Date().toISOString(); })
+      const workflow = loadWorkflow();
+      job = { state: 'running', stop: false, message: '', startedAt: new Date().toISOString(), index: 0, total: 0, current: '', counts: {}, recent: [], trackerFile: '', workflow: workflow.name };
+      run({ ...opts, workflow }).then(() => { job.state = job.stop ? 'stopped' : 'done'; job.finishedAt = new Date().toISOString(); })
         .catch(e => { job.state = 'failed'; job.message = String(e.message || e); job.finishedAt = new Date().toISOString(); });
       return { ok: true };
     }
   };
 }
 
-module.exports = { APP_VERSION, createLookup, valueForLabels, pickCurrentStep, tasksFn, loadConfig };
+module.exports = { APP_VERSION, createLookup, loadConfig, readFn };

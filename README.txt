@@ -42,8 +42,8 @@ FEATURES
 - Screen snapshots with visible markers; this is a sequence of frames, not a continuous video.
 - Sequence playback is visual only; it does not replay clicks or submit forms.
 - Past recordings list, timestamps, age, component counts and screen-frame counts.
-- Excel input queue: upload a workbook, pick the PR-number column, click Run lookup. Each number is searched in the logged-in Playwright browser (read-only), and the current stage plus days at that stage are written to output\PR_status_results_<time>.xlsx (green rows = success, red = NOT_FOUND/ERROR). A Debug sheet and output\lookup_debug\ hold page text and screenshots per row for tuning.
-- lookup-config.json holds the search selectors, stage/date labels, date order (DMY or MDY) and optional tabs to open. Edit it and run again; no restart needed.
+- Record once, run for many: record one PR (type its number in the search box, click through, and SELECT/highlight the text you want captured). In Past Recordings click 'Use as workflow'. Upload an Excel of PR numbers (first sheet, header optional) and click Run status check. Every recorded step waits for its component to appear, then the selected data is read for each PR: a selected table row is found again by its Status (e.g. the row that is 'In Progress'), a selected 'Label: value' by its label. Results go into PR_Status_Tracker.xlsx in C:\Portable_ARIBA_Files\results (current status, step history with the date first seen, run log). Green rows = every step done, red = a step could not be completed (reason shown, screenshot in results\debug). A built-in Ariba workflow is used until you set your own.
+- lookup-config.json holds the waiting limits (default: wait up to 2 minutes for each component). Edit it and run again; no restart needed.
 - HELP.html and public\help.html provide detailed instructions and safety notes.
 
 Troubleshooting: If Chromium setup previously failed with 'node is not recognized', use this updated Start-App.bat. It adds the bundled runtime\node folder to PATH for this app only, then rerun Start-App.bat. It does not change the system PATH or require global Node.js.

@@ -1,24 +1,12 @@
 {
-  "_help": "Edit and save; picked up on the next Run (no restart needed). Selectors are CSS.",
-  "search": {
-    "inputSelector": "#_3fjlgc",
-    "buttonSelector": "#_poi6_b",
-    "pressEnterInstead": false,
-    "alternates": [{ "inputSelector": "#_vyefjc", "buttonSelector": "#_j3mm5" }]
+  "_help": "Edit and save; picked up on the next Run (no restart needed). Times are in milliseconds.",
+  "timeouts": {
+    "navMs": 30000,
+    "componentMs": 120000,
+    "optionalMs": 8000,
+    "noMatchMs": 15000,
+    "loginWaitMinutes": 10
   },
-  "result": {
-    "linkSelector": "",
-    "noResultText": "Search Result\\s+0\\s+project|No (results|items) found"
-  },
-  "project": {
-    "phaseLabels": ["Current Phase"],
-    "subPhaseLabels": ["Sub Phase"],
-    "taskNamePattern": "^[A-Za-z0-9]{1,3}[.)]\\s*\\S",
-    "inProgressStatuses": ["In Progress"],
-    "doneStatuses": ["Complete", "Completed", "Reviewed"]
-  },
-  "afterOpen": [],
-  "timeouts": { "searchMs": 20000, "pageMs": 30000, "navMs": 30000, "componentMs": 120000, "loginWaitMinutes": 10 },
   "pauseBetweenRowsMs": 1500,
   "keepDebugDays": 14
 }

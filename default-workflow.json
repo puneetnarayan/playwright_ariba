@@ -1,0 +1,17 @@
+{
+  "name": "Built-in Ariba sourcing status",
+  "source": "built-in",
+  "prValue": "{{PR}}",
+  "notFoundText": "Search Result\\s+0\\s+project|No (results|items) found",
+  "verifyNumberOnPage": true,
+  "steps": [
+    { "id": 1, "kind": "type", "include": true, "optional": false, "label": "Type the PR number in the search box", "target": { "selector": "#_3fjlgc", "tag": "input" }, "value": "{{PR}}" },
+    { "id": 2, "kind": "click", "include": true, "optional": false, "label": "Click Search", "target": { "selector": "#_poi6_b", "tag": "button", "text": "" } },
+    { "id": 3, "kind": "click", "include": true, "optional": false, "label": "Click the project title", "target": { "selector": "#_5shoib", "tag": "a", "text": "{{PR}}-", "match": "prefix" } },
+    { "id": 4, "kind": "click", "include": true, "optional": true, "label": "Click the arrow next to the title (only if the menu is not open)", "target": { "selector": "#_fgcsyb", "tag": "a", "text": "" }, "skipIfVisible": { "tag": "a", "role": "menuitem", "text": "Open" } },
+    { "id": 5, "kind": "click", "include": true, "optional": true, "label": "Click Open in the menu", "target": { "tag": "a", "role": "menuitem", "text": "Open" } },
+    { "id": 6, "kind": "capture", "include": true, "optional": false, "label": "Capture Current Phase", "rule": { "type": "label-value", "label": "Current Phase" }, "columns": ["Current Phase"] },
+    { "id": 7, "kind": "capture", "include": true, "optional": false, "label": "Capture Sub Phase", "rule": { "type": "label-value", "label": "Sub Phase" }, "columns": ["Sub Phase"] },
+    { "id": 8, "kind": "capture", "include": true, "optional": false, "label": "Capture the step that is In Progress", "rule": { "type": "row-by-status", "status": "In Progress", "statusHeader": "Status", "headers": ["Name", "Owner", "Status"], "cols": [0, 3, 4], "colHeaders": ["Name", "Owner", "Status"], "namePattern": "^[A-Za-z0-9]{1,3}[.)]\\s*\\S" }, "columns": ["Current Step", "Step Owner", "Step Status"] }
+  ]
+}
