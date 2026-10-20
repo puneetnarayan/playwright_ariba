@@ -3,7 +3,7 @@ const fs = require('fs'), path = require('path'), zlib = require('zlib');
 const ROOT = path.join(__dirname, '..');
 const SITE = path.join(ROOT, 'site');
 const TOP = 'PR_Portal_Inspector_Recorder';
-const INCLUDE = ['server.js', 'lookup.js', 'lookup-config.json', 'package.json', 'README.txt', 'HELP.html', 'Start-Here.hta', 'Start-App.bat', 'Run-Server.bat', 'Env-Setup.bat', 'First-Run-Setup.ps1', 'scripts/dep-hash.js', 'public', 'input/README.txt'];
+const INCLUDE = ['server.js', 'lookup.js', 'tracker.js', 'lookup-config.json', 'package.json', 'README.txt', 'HELP.html', 'Start-Here.hta', 'Start-App.bat', 'Run-Server.bat', 'Env-Setup.bat', 'First-Run-Setup.ps1', 'scripts/dep-hash.js', 'public', 'input/README.txt'];
 
 const table = new Int32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
 const crc32 = buf => { let c = -1; for (const b of buf) c = table[(c ^ b) & 255] ^ (c >>> 8); return (c ^ -1) >>> 0; };

@@ -32,7 +32,7 @@ app.post('/api/excel/upload',(req,res)=>{try{
  if(!workbook.SheetNames.length)return res.status(400).json({error:'No worksheet was found in this file.'});
  const safeName=Date.now()+'_'+name.replace(/[^a-zA-Z0-9._-]/g,'_');
  fs.writeFileSync(path.join(INPUT,safeName),buffer);
- const sheets=workbook.SheetNames.map(sheetName=>{const sheet=workbook.Sheets[sheetName];const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false,blankrows:false});const cleanRows=rows.filter(row=>row.some(cell=>String(cell??'').trim()!==''));return {name:sheetName,rowCount:Math.max(0,cleanRows.length-1),columnCount:cleanRows.reduce((m,r)=>Math.max(m,r.length),0),headers:(cleanRows[0]||[]).map((v,i)=>String(v||('Column '+(i+1))).trim()),preview:cleanRows.slice(0,6).map(row=>row.map(v=>String(v??'').slice(0,300))),totalNonEmptyRows:cleanRows.length};});
+ const sheets=workbook.SheetNames.map(sheetName=>{const sheet=workbook.Sheets[sheetName];const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:false,blankrows:false});const cleanRows=rows.filter(row=>row.some(cell=>String(cell??'').trim()!==''));return {name:sheetName,rowCount:Math.max(0,cleanRows.length-(/^\d{6,}$/.test(String(cleanRows[0]?.[0]??'').trim())?0:1)),columnCount:cleanRows.reduce((m,r)=>Math.max(m,r.length),0),headers:(cleanRows[0]||[]).map((v,i)=>String(v||('Column '+(i+1))).trim()),preview:cleanRows.slice(0,6).map(row=>row.map(v=>String(v??'').slice(0,300))),totalNonEmptyRows:cleanRows.length};});
  const first=sheets[0];const meta={ok:true,fileName:name,storedFile:safeName,uploadedAt:new Date().toISOString(),sizeBytes:buffer.length,sheetNames:workbook.SheetNames,sheets,selectedSheet:first?.name||'',totalDataRows:sheets.reduce((n,x)=>n+x.rowCount,0),status:'Loaded for review; automation has not been run.'};
  fs.writeFileSync(EXCEL_META,JSON.stringify(meta,null,2));res.json({ok:true,workbook:meta});
  }catch(e){res.status(400).json({error:'Could not read this workbook: '+e.message});}});
@@ -193,20 +193,27 @@ app.get('/api/frame', (req,res)=>{const rel=String(req.query.file||'');if(!/^[A-
 app.delete('/api/recordings/:file',(req,res)=>{try{const name=String(req.params.file||'');const m=name.match(/^([A-Za-z0-9_-]+_\d{4}-\d{2}-\d{2}T[0-9-]+Z)_workflow_capture\.json$/);if(!m)return res.status(400).json({error:'Invalid recording name.'});const stem=m[1];if(recording&&stem===recordingFileStem)return res.status(409).json({error:'This recording is active. Stop it before deleting.'});const removed=[];for(const n of [name,stem+'_frames',stem+'_playwright_workflow_draft.js']){const full=path.resolve(REC,n);if(!full.startsWith(path.resolve(REC)+path.sep))continue;if(fs.existsSync(full)){fs.rmSync(full,{recursive:true,force:true});removed.push(n);}}res.json({ok:true,removed})}catch(e){res.status(500).json({error:e.message})}});
 app.get('/api/download/:file',(req,res)=>{let name=req.params.file;if(!['latest_inspection.json','playwright_workflow_draft.js'].includes(name)&&! /^[A-Za-z0-9_-]+_\d{4}-\d{2}-\d{2}T[0-9-]+Z_(workflow_capture\.json|playwright_workflow_draft\.js)$/.test(name))return res.status(404).end();let f=path.join(name==='latest_inspection.json'?OUT:REC,name);if(!fs.existsSync(f))return res.status(404).send('Run inspection/export first.');res.download(f)});
 
-// ---- Row-by-row read-only lookup (see lookup.js and lookup-config.json) ----
-function readLookupRows(sheetName){
+// ---- PR status lookup (see lookup.js, tracker.js and lookup-config.json) ----
+// Results live in the shared folder so they survive new app versions: <shared>\results\PR_Status_Tracker.xlsx
+const RESULTS = process.env.PORTABLE_ARIBA_FILES ? path.join(process.env.PORTABLE_ARIBA_FILES, 'results') : path.join(OUT, 'results');
+fs.mkdirSync(RESULTS, {recursive:true});
+// Reads PR numbers from the first (selected) sheet. Works with or without a header row; uses the first column unless a header names another.
+function readPrNumbers(sheetName){
  const meta=excelCurrent();if(!meta)throw new Error('Upload a workbook first.');
  const wb=XLSX.readFile(path.join(INPUT,meta.storedFile),{cellDates:false});
- const ws=wb.Sheets[sheetName||meta.selectedSheet];if(!ws)throw new Error('Worksheet not found.');
+ const name=sheetName||meta.selectedSheet||wb.SheetNames[0];const ws=wb.Sheets[name];if(!ws)throw new Error('Worksheet not found.');
  const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:false}).filter(r=>r.some(c=>String(c??'').trim()!==''));
- if(rows.length<2)throw new Error('The worksheet has no data rows.');
- const headers=rows[0].map((v,i)=>String(v||('Column '+(i+1))).trim());
- return {headers,dataRows:rows.slice(1)};
+ if(!rows.length)throw new Error('The worksheet is empty.');
+ const headerless=/^\d{6,}$/.test(String(rows[0][0]??'').trim());
+ let col=0;if(!headerless){const i=rows[0].map(v=>String(v||'')).findIndex(x=>/\b(pr|requisition|rfp|event|number|no|id)\b/i.test(x));col=i>=0?i:0;}
+ const seen=new Set(),numbers=[];
+ for(const r of headerless?rows:rows.slice(1)){const v=String(r[col]??'').trim();if(v&&!seen.has(v)){seen.add(v);numbers.push(v)}}
+ return {numbers,headerless,column:col,sheet:name,fileName:meta.fileName};
 }
-const lookup=createLookup({getPage:()=>page,isRecording:()=>recording,outDir:OUT,readRows:readLookupRows});
-app.post('/api/lookup/start',async(req,res)=>{try{const sheetName=String(req.body?.sheetName||'');const column=String(req.body?.column||'');const {headers}=readLookupRows(sheetName);if(!headers.includes(column))return res.status(400).json({error:'Choose the column that holds the PR number.'});await lookup.start({sheetName,column});res.json({ok:true})}catch(e){res.status(400).json({error:e.message})}});
+const lookup=createLookup({getPage:()=>page,isRecording:()=>recording,resultsDir:RESULTS,readRows:null});
+app.post('/api/lookup/start',async(req,res)=>{try{const r=readPrNumbers(String(req.body?.sheetName||''));await lookup.start({numbers:r.numbers,sourceName:r.fileName});res.json({ok:true,count:r.numbers.length})}catch(e){res.status(400).json({error:e.message})}});
 app.post('/api/lookup/stop',(_req,res)=>res.json({ok:true,stopping:lookup.stop()}));
-app.get('/api/lookup/status',(_req,res)=>res.json({ok:true,job:lookup.status()}));
-app.get('/api/lookup/headers',(req,res)=>{try{res.json({ok:true,headers:readLookupRows(String(req.query.sheet||'')).headers})}catch(e){res.status(400).json({error:e.message})}});
-app.get('/api/lookup/download',(_req,res)=>{const f=lookup.file();if(!f||!fs.existsSync(f))return res.status(404).send('No results file yet.');res.download(f)});
+app.get('/api/lookup/status',(_req,res)=>res.json({ok:true,job:lookup.status(),folder:RESULTS,trackerExists:!!lookup.file()}));
+app.get('/api/lookup/headers',(req,res)=>{try{const r=readPrNumbers(String(req.query.sheet||''));res.json({ok:true,count:r.numbers.length,preview:r.numbers.slice(0,5),headerless:r.headerless,column:r.column,sheet:r.sheet,folder:RESULTS})}catch(e){res.status(400).json({error:e.message})}});
+app.get('/api/lookup/download',(_req,res)=>{const f=lookup.file();if(!f||!fs.existsSync(f))return res.status(404).send('No tracker workbook yet. Run the lookup first.');res.download(f)});
 app.listen(PORT,'127.0.0.1',()=>console.log(`PR Portal Inspector running at http://127.0.0.1:${PORT}\nKeep this PowerShell window open. Use only for authorized read-only inspection.`));
