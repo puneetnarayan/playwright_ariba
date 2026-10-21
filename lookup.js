@@ -18,6 +18,25 @@ function loadConfig() {
   return { timeouts: { ...DEFAULTS.timeouts, ...(user.timeouts || {}) }, pauseBetweenRowsMs: user.pauseBetweenRowsMs ?? DEFAULTS.pauseBetweenRowsMs, keepDebugDays: user.keepDebugDays ?? DEFAULTS.keepDebugDays };
 }
 
+// Runs inside the page (and every frame): marks the title link of the first lettered task that has a document, for the next click.
+const markTaskFn = () => {
+  const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
+  document.querySelectorAll('[data-pr-target]').forEach(e => e.removeAttribute('data-pr-target'));
+  let hdr = null, nIdx = -1, dIdx = -1;
+  for (const tr of document.querySelectorAll('tr')) {
+    const cells = Array.from(tr.children).filter(c => /^T[DH]$/.test(c.tagName));
+    const texts = cells.map(c => clean(c.innerText));
+    if (!hdr) { const n = texts.indexOf('Name'), d = texts.indexOf('Document'); if (n >= 0 && d >= 0) { hdr = texts; nIdx = n; dIdx = d; } continue; }
+    const at = i => (texts.length === hdr.length ? i : texts.length - (hdr.length - i));
+    const name = texts[at(nIdx)] || '', doc = texts[at(dIdx)] || '';
+    if (!/^[A-Za-z][.)]\s*\S/.test(name) || !doc) continue;
+    for (const a of cells[at(nIdx)].querySelectorAll('a')) {
+      if (clean(a.innerText) && name.startsWith(clean(a.innerText).slice(0, 12))) { a.setAttribute('data-pr-target', '1'); return true; }
+    }
+  }
+  return false;
+};
+
 // Runs inside the page (and every frame): reads data by a capture rule. Returns {state:'ok'|'wait'|'nomatch', values}.
 const readFn = rule => {
   const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
@@ -35,6 +54,49 @@ const readFn = rule => {
     const re = new RegExp('^' + want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:\\-]\\s*(.+)$', 'i');
     for (const l of lines) { const m = l.match(re); if (m) return { state: 'ok', values: [m[1]] }; }
     return { state: 'wait' };
+  }
+  const headerIndex = (cells, name) => cells.findIndex(c => c.toLowerCase() === String(name || '').toLowerCase());
+  const cellAt = (cells, hdr, idx) => (idx < 0 ? '' : (cells.length === hdr.length ? cells[idx] : cells[cells.length - (hdr.length - idx)])) || '';
+  if (rule.type === 'task-steps') {
+    const namePat = new RegExp(rule.namePattern || '^([A-Za-z])[.)]\\s*\\S');
+    let hdr = null, nIdx = -1, sIdx = -1, oIdx = -1;
+    const steps = [];
+    for (const tr of document.querySelectorAll('tr')) {
+      const cells = cellsOf(tr).map(c => clean(c.innerText));
+      if (!hdr) { const n = headerIndex(cells, rule.nameHeader || 'Name'), st = headerIndex(cells, rule.statusHeader || 'Status'); if (n >= 0 && st >= 0) { hdr = cells; nIdx = n; sIdx = st; oIdx = headerIndex(cells, rule.ownerHeader || 'Owner'); } continue; }
+      const name = cellAt(cells, hdr, nIdx), status = cellAt(cells, hdr, sIdx);
+      if (!name || !status || name.length > 200 || cells.length < 3) continue;
+      const m = name.match(namePat);
+      if (!m) continue;
+      if (steps.some(x => x.name === name)) continue;
+      steps.push({ letter: m[1].toUpperCase(), name, status, owner: cellAt(cells, hdr, oIdx) });
+    }
+    if (!hdr || !steps.length) return { state: 'wait' };
+    const letters = (rule.letters && rule.letters.length) ? rule.letters : steps.map(x => x.letter);
+    const values = letters.map(l => { const x = steps.find(y => y.letter === l); return x ? (x.status === 'Complete' ? 'Complete' : x.status + (x.owner ? ' (' + x.owner + ')' : '')) : 'Not found'; });
+    const pending = steps.filter(x => x.status !== 'Complete').map(x => x.name + ' - ' + x.status + (x.owner ? ' - ' + x.owner : ''));
+    values.push(pending.length ? pending.join('; ') : 'None');
+    return { state: 'ok', values };
+  }
+  if (rule.type === 'participation') {
+    let hdr = null, nIdx = -1, sIdx = -1;
+    const rows = [];
+    for (const tr of document.querySelectorAll('tr')) {
+      const cells = cellsOf(tr).map(c => clean(c.innerText));
+      const n = headerIndex(cells, rule.nameHeader || 'Organization Name'), st = headerIndex(cells, rule.statusHeader || 'Status');
+      if (n >= 0 && st >= 0) { hdr = cells; nIdx = n; sIdx = st; rows.length = 0; continue; }
+      if (!hdr || cells.length < 3 || cells.length > hdr.length + 1 || cells.length < hdr.length - 1) continue;
+      const name = cellAt(cells, hdr, nIdx);
+      if (!name || name.length > 150) continue;
+      if (rows.some(r => r.name === name)) continue;
+      rows.push({ name, status: cellAt(cells, hdr, sIdx) });
+    }
+    if (!hdr) return { state: 'wait' };
+    if (!rows.length) return { state: 'nomatch' };
+    const ok = String(rule.okValue || 'Participated').toLowerCase();
+    const done = rows.filter(r => r.status.toLowerCase() === ok);
+    const follow = rows.filter(r => r.status.toLowerCase() !== ok);
+    return { state: 'ok', values: [String(rows.length), String(done.length), follow.length ? follow.map(r => r.name + (r.status ? ' (' + r.status + ')' : ' (no bid)')).join('; ') : 'None', rows.map(r => r.name + ': ' + (r.status || 'blank')).join('; ')] };
   }
   if (rule.type === 'row-by-status') {
     const need = (rule.headers || []).map(h => h.toLowerCase());
@@ -135,9 +197,16 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
     if (target.selector && target.selector.startsWith('#')) out.push({ make: f => f.locator(target.selector), verify: re });
     if (re) out.push({ make: f => f.locator(tagSel + ':visible').filter({ hasText: re }), verify: null });
     if (target.cssPath) out.push({ make: f => f.locator(target.cssPath), verify: re });
+    if (re && text) out.push({ make: f => f.getByText(re).locator('visible=true'), verify: null });   // last resort: the smallest visible element with that text (tabs, headings)
     return out;
   }
   async function findNow(page, target, number) {
+    if (target.special === 'task-with-document') {
+      for (const f of page.frames()) {
+        try { if (await f.evaluate(markTaskFn)) { const loc = f.locator('[data-pr-target="1"]').first(); if (await loc.isVisible().catch(() => false)) return loc; } } catch { /* frame navigating */ }
+      }
+      return null;
+    }
     const cands = candidates(target, number);
     if (!cands.length) return null;
     for (const f of page.frames()) {
@@ -152,7 +221,7 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
     }
     return null;
   }
-  const describe = (target, number) => subst(target.text, number) || target.selector || target.cssPath || target.tag || 'component';
+  const describe = (target, number) => (target.special === 'task-with-document' ? 'the first step that has a document' : '') || subst(target.text, number) || target.selector || target.cssPath || target.tag || 'component';
 
   // Waits for a component. Throws errors with code 'not_found' or 'timeout' that the caller turns into row results.
   async function waitFor(page, target, number, ms, ctx) {
@@ -193,7 +262,7 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
           if (r.state === 'nomatch') sawNoMatch = true;
         } catch { /* frame navigating */ }
       }
-      if (sawNoMatch) { nomatchSince = nomatchSince || Date.now(); if (Date.now() - nomatchSince > cfg.timeouts.noMatchMs) return { state: 'nomatch' }; } else nomatchSince = 0;
+      if (sawNoMatch) { nomatchSince = nomatchSince || Date.now(); if (Date.now() - nomatchSince > cfg.timeouts.noMatchMs) return rule.type === 'participation' ? { state: 'ok', values: ['0', '0', 'No suppliers listed', ''] } : { state: 'nomatch' }; } else nomatchSince = 0;
       await sleep(600);
     }
     return { state: 'wait' };
@@ -285,7 +354,10 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
   async function run(opts) {
     const cfg = loadConfig();
     const wf = opts.workflow;
-    const cols = wf.steps.filter(s => s.include && s.kind === 'capture').flatMap(s => s.columns || []);
+    const capSteps = wf.steps.filter(s => s.include && s.kind === 'capture');
+    const cols = capSteps.flatMap(s => s.columns || []);
+    const styles = {};
+    capSteps.forEach(s => (s.columns || []).forEach((c, k) => { if ((s.columnStyles || [])[k]) styles[c] = s.columnStyles[k]; }));
     const numbers = opts.numbers;
     const startUrl = getPage().url();
     const now = new Date();
@@ -313,19 +385,19 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
       job.counts = { ...counts };
       job.recent.push({ number, result: row.result, data: cols.map(c => (row.vals && row.vals[c]) || '').filter(Boolean).join(' | '), days: row.days, change: row.change, reason: row.reason });
       job.recent = job.recent.slice(-200);
-      await persist(state, cols);
+      await persist(state, cols, styles);
       if (i < numbers.length - 1 && !job.stop) await sleep(cfg.pauseBetweenRowsMs);
     }
     state.runLog.push([runId, tracker.localStamp(now), tracker.localStamp(new Date()), opts.sourceName || '', job.index, counts.SUCCESS, counts.NOT_FOUND, counts.ERROR, changed, job.stop ? 'stopped' : 'done', APP_VERSION, wf.name || '']);
-    await persist(state, cols);
+    await persist(state, cols, styles);
     job.changed = changed;
   }
 
-  async function persist(state, cols) {
-    try { await tracker.save(trackerFile, cols, state); }
+  async function persist(state, cols, styles) {
+    try { await tracker.save(trackerFile, cols, state, styles); }
     catch (e) {
       const alt = trackerFile.replace(/\.xlsx$/, '_' + Date.now() + '.xlsx');
-      await tracker.save(alt, cols, state);
+      await tracker.save(alt, cols, state, styles);
       job.trackerFile = path.basename(alt);
       job.message = 'The tracker was open in Excel, so this run was saved as ' + path.basename(alt) + '. Close Excel and merge or rename it.';
     }

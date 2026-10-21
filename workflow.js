@@ -15,6 +15,8 @@ const isLoginAction = a => /login\.microsoftonline\.com|login\.live\.com/i.test(
 
 function describeRule(rule) {
   if (!rule) return '';
+  if (rule.type === 'task-steps') return 'Status of every lettered step (' + (rule.letters || []).join(', ') + '); anything other than Complete is listed with its owner';
+  if (rule.type === 'participation') return 'Every supplier row: counts those whose ' + (rule.statusHeader || 'Status') + ' is "' + (rule.okValue || 'Participated') + '"; the rest are listed for follow-up';
   if (rule.type === 'row-by-status') return 'Row whose ' + (rule.statusHeader || 'Status') + ' is "' + rule.status + '" (' + (rule.colHeaders || []).map(h => h || 'column').join(', ') + ')';
   if (rule.type === 'label-value') return 'Value next to "' + rule.label + '"';
   return 'Same place on the page (' + (rule.selector || rule.cssPath || '?') + ')';
@@ -34,6 +36,7 @@ function buildFromCapture(capture, label) {
   let prValue = '';
   const used = new Set();
   let lastClick = null;
+  const seenRules = new Set();
   for (const a of actions) {
     if (isLoginAction(a) || a.blocked) continue;
     if (a.kind === 'change' && a.tag !== 'select' && a.value && a.value !== '[REDACTED]' && !/REDACTED/.test(a.value)) {
@@ -48,8 +51,11 @@ function buildFromCapture(capture, label) {
       steps.push({ kind: 'click', include: a.kind === 'click', optional: false, label: 'Click ' + ((a.text || a.selector || a.tag || '').slice(0, 60)), target: { selector: a.selector || '', tag: a.tag || '', role: a.role || '', text: a.text || '', cssPath: a.cssPath || '' } });
       lastClick = a;
     } else if (a.kind === 'capture' && a.rule) {
+      const key = JSON.stringify(a.rule);
+      if (seenRules.has(key)) continue;   // the same selection re-fired by a later click
+      seenRules.add(key);
       const cols = (a.columns && a.columns.length ? a.columns : [a.rule.label || 'Capture']).map(n => uniqueName(n, used));
-      steps.push({ kind: 'capture', include: true, optional: false, label: 'Capture ' + cols.join(', '), rule: a.rule, columns: cols, sample: (a.text || '').slice(0, 200) });
+      steps.push({ kind: 'capture', include: true, optional: false, label: 'Capture ' + cols.join(', '), rule: a.rule, columns: cols, columnStyles: a.columnStyles || [], sample: (a.text || '').slice(0, 200) });
     }
   }
   // Only the part of the recording from the first typed value onward is replayed (anything before is login/landing noise).

@@ -165,8 +165,33 @@ const recorderExtra=()=>{
   const range=sel.getRangeAt(0);const text=clean(sel.toString(),1000);if(!text)return;
   if(text===lastText&&Date.now()-lastAt<1500)return;lastText=text;lastAt=Date.now();
   const start=elOf(range.startContainer);if(!start||start.closest('#__prVisualOverlay'))return;
-  const row=start.closest('tr');let rule=null,columns=[];
-  if(row){
+  const row=start.closest('tr');let rule=null,columns=[],columnStyles=[];
+  // Several table rows selected: all steps of a task list, or all suppliers of a participants list.
+  let table=row&&row.closest('table');
+  while(table&&!rule){
+   const rowsSel=Array.from(table.querySelectorAll('tr')).filter(r=>r.closest('table')===table&&range.intersectsNode(r)&&cellsOf(r).length>=3&&!cellsOf(r).some(c=>c.tagName==='TH'));
+   if(rowsSel.length>=2){
+    const hdr=headerFor(rowsSel[0])||[];
+    const sIdx=hdr.findIndex(h=>/^status$/i.test(h));
+    if(sIdx>=0){
+     const first=r=>{const cs=cellsOf(r).map(c=>clean(c.innerText,200));return cs.find(c=>c)||''};
+     const letters=rowsSel.map(r=>{const m=first(r).match(/^([A-Za-z])[.)]\s*\S/);return m?m[1].toUpperCase():null}).filter(Boolean);
+     if(letters.length>=2){
+      const uniq=[...new Set(letters)];
+      rule={type:'task-steps',letters:uniq,nameHeader:hdr.find(h=>/^name$/i.test(h))||'Name',statusHeader:hdr[sIdx],ownerHeader:hdr.find(h=>/^owner$/i.test(h))||'Owner'};
+      columns=uniq.map(l=>'Step '+l).concat(['Pending Steps (Owner)']);columnStyles=uniq.map(()=>'complete').concat(['pending']);
+     }else{
+      const statuses=rowsSel.map(r=>{const cs=cellsOf(r).map(c=>clean(c.innerText,100));return cs[sIdx]||''}).filter(Boolean);
+      const ok=statuses.find(x=>/^participated$/i.test(x))||statuses[0]||'Participated';
+      const nameH=hdr.find(h=>/organi[sz]ation|supplier|vendor|party|company/i.test(h))||hdr.find((h,i)=>h&&i!==sIdx)||'Name';
+      rule={type:'participation',nameHeader:nameH,statusHeader:hdr[sIdx],okValue:ok};
+      columns=['Suppliers Invited','Suppliers Participated','Follow Up (No Bid)','Supplier Status Detail'];columnStyles=['','','pending',''];
+     }
+    }
+   }
+   table=table.parentElement?table.parentElement.closest('table'):null;
+  }
+  if(!rule&&row){
    const cellEls=cellsOf(row);const cells=cellEls.map(c=>clean(c.innerText,200));
    const picked=[];cellEls.forEach((c,i)=>{if(cells[i]&&range.intersectsNode(c)&&(text.includes(cells[i].slice(0,15))||cells[i].includes(text)))picked.push(i)});
    if(picked.length){
@@ -185,7 +210,7 @@ const recorderExtra=()=>{
   }
   if(!rule){rule={type:'same-element',selector:start.id?'#'+CSS.escape(start.id):'',cssPath:cssPath(start)};columns=['Capture'];}
   const b=start.getBoundingClientRect();
-  window.__prEvent?.({kind:'capture',time:new Date().toISOString(),tag:start.tagName.toLowerCase(),text,selector:rule.selector||'',cssPath:cssPath(start),url:location.href,rect:{x:b.x,y:b.y,width:b.width,height:b.height},rule,columns,note:'Captured data area'});
+  window.__prEvent?.({kind:'capture',time:new Date().toISOString(),tag:start.tagName.toLowerCase(),text,selector:rule.selector||'',cssPath:cssPath(start),url:location.href,rect:{x:b.x,y:b.y,width:b.width,height:b.height},rule,columns,columnStyles,note:'Captured data area'});
  };
  document.addEventListener('mouseup',()=>setTimeout(analyse,80),true);
  document.addEventListener('keyup',ev=>{if(ev.shiftKey)setTimeout(analyse,80)},true);

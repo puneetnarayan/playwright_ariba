@@ -8,7 +8,15 @@ const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
 
-const GREEN = 'FFD9F2D9', RED = 'FFF8D0D0';
+const GREEN = 'FFD9F2D9', RED = 'FFF8D0D0', YELLOW = 'FFFFF2B3';
+// Cell colours by column style: 'complete' (value Complete = green, anything else = yellow), 'pending' (None = green, else yellow)
+function styleColour(style, value) {
+  const v = String(value || '').trim();
+  if (!style || !v) return null;
+  if (style === 'complete') return v === 'Complete' ? GREEN : YELLOW;
+  if (style === 'pending') return v === 'None' ? GREEN : YELLOW;
+  return null;
+}
 const pad = n => String(n).padStart(2, '0');
 const localDateOnlyUtc = d => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));   // Excel date at midnight, no timezone drift
 const localStamp = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
@@ -91,7 +99,7 @@ function apply(state, cols, pr, outcome, run) {
   return { changed: !!event };
 }
 
-async function save(file, cols, state) {
+async function save(file, cols, state, styles = {}) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Current Status');
   const heads = currentHeaders(cols);
@@ -105,8 +113,10 @@ async function save(file, cols, state) {
     const row = ws.addRow([r.pr, ...cols.map(c => (r.vals && r.vals[c]) || ''), r.firstSeen || '', r.days === undefined ? '' : r.days, r._checked ? r.change : 'Not in latest input', r.lastChecked, r.result, r.reason]);
     row.getCell(seenIdx).numFmt = 'dd-mmm-yyyy';
     if (!r._checked) continue;
-    const argb = r.result === 'SUCCESS' ? GREEN : RED;
-    for (let c = 1; c <= heads.length; c++) row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+    const fill = (c, argb) => { row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } }; };
+    if (r.result !== 'SUCCESS') { for (let c = 1; c <= heads.length; c++) fill(c, RED); continue; }
+    fill(1, GREEN); fill(heads.length - 1, GREEN);   // PR number and Result
+    cols.forEach((name, i) => { const argb = styleColour(styles[name], r.vals && r.vals[name]); if (argb) fill(2 + i, argb); });
   }
   const hs = wb.addWorksheet('Step History');
   hs.addRow(historyHeaders(cols)).font = { bold: true };
