@@ -22,6 +22,7 @@ function loadConfig() {
 const markTaskFn = () => {
   const clean = s => String(s || '').replace(/\s+/g, ' ').trim();
   document.querySelectorAll('[data-pr-target]').forEach(e => e.removeAttribute('data-pr-target'));
+  document.querySelectorAll('[data-pr-arrow]').forEach(e => e.removeAttribute('data-pr-arrow'));
   let hdr = null, nIdx = -1, dIdx = -1;
   for (const tr of document.querySelectorAll('tr')) {
     const cells = Array.from(tr.children).filter(c => /^T[DH]$/.test(c.tagName));
@@ -31,7 +32,17 @@ const markTaskFn = () => {
     const name = texts[at(nIdx)] || '', doc = texts[at(dIdx)] || '';
     if (!/^[A-Za-z][.)]\s*\S/.test(name) || !doc) continue;
     for (const a of cells[at(nIdx)].querySelectorAll('a')) {
-      if (clean(a.innerText) && name.startsWith(clean(a.innerText).slice(0, 12))) { a.setAttribute('data-pr-target', '1'); return true; }
+      if (clean(a.innerText) && name.startsWith(clean(a.innerText).slice(0, 12))) {
+        a.setAttribute('data-pr-target', '1');
+        // The small "V" after the title: the first small, empty, visible element after the title link in the same cell.
+        const all = Array.from(cells[at(nIdx)].querySelectorAll('*'));
+        for (const e of all.slice(all.indexOf(a) + 1)) {
+          if (e.closest('[role="menu"]') || e.getAttribute('role') === 'menuitem' || !['A', 'IMG', 'SPAN', 'I', 'DIV', 'BUTTON'].includes(e.tagName)) continue;
+          const r = e.getBoundingClientRect();
+          if (r.width >= 6 && r.width <= 45 && r.height >= 6 && r.height <= 45 && getComputedStyle(e).visibility !== 'hidden' && !clean(e.innerText)) { e.setAttribute('data-pr-arrow', '1'); break; }
+        }
+        return true;
+      }
     }
   }
   return false;
@@ -221,7 +232,34 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
     }
     return null;
   }
-  const describe = (target, number) => (target.special === 'task-with-document' ? 'the first step that has a document' : '') || subst(target.text, number) || target.selector || target.cssPath || target.tag || 'component';
+  const describe = (target, number) => (target.special === 'task-with-document' || target.special === 'open-event-from-task' ? 'the first step that has a document' : '') || subst(target.text, number) || target.selector || target.cssPath || target.tag || 'component';
+
+  // Opens the event from the dropdown menu of the first lettered step that has a document: the small V after the title,
+  // then 'Open Event'. Tries the V, then the title link, then a click just right of the title, until the menu shows.
+  async function openEventFromTask(cfg) {
+    const menuItem = () => getPage().locator('[role="menuitem"]:visible', { hasText: /^\s*Open Event\s*$/ }).first();
+    const markTasks = async () => {
+      for (const f of getPage().frames()) { try { if (await f.evaluate(markTaskFn)) return f; } catch { /* navigating */ } }
+      return null;
+    };
+    let frame = null;
+    const until = Date.now() + cfg.timeouts.componentMs;
+    while (Date.now() < until && !job.stop && !(frame = await markTasks())) await sleep(500);
+    if (!frame) { const e = new Error('timeout'); e.code = 'timeout'; throw e; }
+    for (const how of ['arrow', 'title', 'offset']) {
+      await getPage().keyboard.press('Escape').catch(() => {});
+      frame = (await markTasks()) || frame;
+      const title = frame.locator('[data-pr-target="1"]').first();
+      try {
+        if (how === 'arrow') { const arrow = frame.locator('[data-pr-arrow="1"]').first(); if (!(await arrow.count())) continue; await arrow.click({ timeout: 5000 }); }
+        else if (how === 'title') await title.click({ timeout: 5000 });
+        else { const b = await title.boundingBox(); if (!b) continue; await getPage().mouse.click(b.x + b.width + 14, b.y + b.height / 2); }
+      } catch { continue; }
+      const u = Date.now() + 6000;
+      while (Date.now() < u) { if (await menuItem().isVisible().catch(() => false)) { await getPage().evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {}); await menuItem().click({ timeout: cfg.timeouts.navMs }); return; } await sleep(300); }
+    }
+    throw new Error('The step menu with "Open Event" did not open (tried the V arrow, the title link and a click beside the title)');
+  }
 
   // Waits for a component. Throws errors with code 'not_found' or 'timeout' that the caller turns into row results.
   async function waitFor(page, target, number, ms, ctx) {
@@ -327,6 +365,7 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
           continue;
         }
         const target = s.target || {};
+        if (target.special === 'open-event-from-task') { await openEventFromTask(cfg); ctx.retryPrev = null; await settle(page, cfg); continue; }
         const loc = await waitFor(page, target, number, s.optional ? cfg.timeouts.optionalMs : cfg.timeouts.componentMs, ctx);
         if (s.kind === 'type') {
           await loc.fill(subst(s.value, number));

@@ -5,17 +5,183 @@
   "notFoundText": "Search Result\\s+0\\s+project|No (results|items) found",
   "verifyNumberOnPage": true,
   "steps": [
-    { "id": 1, "kind": "type", "include": true, "optional": false, "label": "Type the PR number in the search box", "target": { "selector": "#_3fjlgc", "tag": "input" }, "value": "{{PR}}" },
-    { "id": 2, "kind": "click", "include": true, "optional": false, "label": "Click Search", "target": { "selector": "#_poi6_b", "tag": "button", "text": "" } },
-    { "id": 3, "kind": "click", "include": true, "optional": false, "label": "Click the project title", "target": { "selector": "#_5shoib", "tag": "a", "text": "{{PR}}-", "match": "prefix" } },
-    { "id": 4, "kind": "click", "include": true, "optional": true, "label": "Click the arrow next to the title (only if the menu is not open)", "target": { "selector": "#_fgcsyb", "tag": "a", "text": "" }, "skipIfVisible": { "tag": "a", "role": "menuitem", "text": "Open" } },
-    { "id": 5, "kind": "click", "include": true, "optional": true, "label": "Click Open in the menu", "target": { "tag": "a", "role": "menuitem", "text": "Open" } },
-    { "id": 6, "kind": "capture", "include": true, "optional": false, "label": "Capture Current Phase", "rule": { "type": "label-value", "label": "Current Phase" }, "columns": ["Current Phase"], "columnStyles": [] },
-    { "id": 7, "kind": "capture", "include": true, "optional": false, "label": "Capture Sub Phase", "rule": { "type": "label-value", "label": "Sub Phase" }, "columns": ["Sub Phase"], "columnStyles": [] },
-    { "id": 8, "kind": "capture", "include": true, "optional": false, "label": "Capture the status of steps A to E (Complete = green, anything else = yellow with owner)", "rule": { "type": "task-steps", "letters": ["A", "B", "C", "D", "E"], "nameHeader": "Name", "statusHeader": "Status", "ownerHeader": "Owner" }, "columns": ["Step A", "Step B", "Step C", "Step D", "Step E", "Pending Steps (Owner)"], "columnStyles": ["complete", "complete", "complete", "complete", "complete", "pending"] },
-    { "id": 9, "kind": "click", "include": true, "optional": false, "label": "Click the title of the first step that has a document (opens its menu)", "target": { "special": "task-with-document" } },
-    { "id": 10, "kind": "click", "include": true, "optional": false, "label": "Click Open Event in the menu", "target": { "tag": "a", "role": "menuitem", "text": "Open Event" } },
-    { "id": 11, "kind": "click", "include": true, "optional": false, "label": "Click the Suppliers tab", "target": { "tag": "a", "text": "Suppliers" } },
-    { "id": 12, "kind": "capture", "include": true, "optional": false, "label": "Capture supplier participation (Participated = fine, blank = follow up)", "rule": { "type": "participation", "nameHeader": "Organization Name", "statusHeader": "Status", "okValue": "Participated" }, "columns": ["Suppliers Invited", "Suppliers Participated", "Follow Up (No Bid)", "Supplier Status Detail"], "columnStyles": ["", "", "pending", ""] }
+    {
+      "id": 1,
+      "kind": "type",
+      "include": true,
+      "optional": false,
+      "label": "Type the PR number in the search box",
+      "target": {
+        "selector": "#_3fjlgc",
+        "tag": "input"
+      },
+      "value": "{{PR}}"
+    },
+    {
+      "id": 2,
+      "kind": "click",
+      "include": true,
+      "optional": false,
+      "label": "Click Search",
+      "target": {
+        "selector": "#_poi6_b",
+        "tag": "button",
+        "text": ""
+      }
+    },
+    {
+      "id": 3,
+      "kind": "click",
+      "include": true,
+      "optional": false,
+      "label": "Click the project title",
+      "target": {
+        "selector": "#_5shoib",
+        "tag": "a",
+        "text": "{{PR}}-",
+        "match": "prefix"
+      }
+    },
+    {
+      "id": 4,
+      "kind": "click",
+      "include": true,
+      "optional": true,
+      "label": "Click the arrow next to the title (only if the menu is not open)",
+      "target": {
+        "selector": "#_fgcsyb",
+        "tag": "a",
+        "text": ""
+      },
+      "skipIfVisible": {
+        "tag": "a",
+        "role": "menuitem",
+        "text": "Open"
+      }
+    },
+    {
+      "id": 5,
+      "kind": "click",
+      "include": true,
+      "optional": true,
+      "label": "Click Open in the menu",
+      "target": {
+        "tag": "a",
+        "role": "menuitem",
+        "text": "Open"
+      }
+    },
+    {
+      "id": 6,
+      "kind": "capture",
+      "include": true,
+      "optional": false,
+      "label": "Capture Current Phase",
+      "rule": {
+        "type": "label-value",
+        "label": "Current Phase"
+      },
+      "columns": [
+        "Current Phase"
+      ],
+      "columnStyles": []
+    },
+    {
+      "id": 7,
+      "kind": "capture",
+      "include": true,
+      "optional": false,
+      "label": "Capture Sub Phase",
+      "rule": {
+        "type": "label-value",
+        "label": "Sub Phase"
+      },
+      "columns": [
+        "Sub Phase"
+      ],
+      "columnStyles": []
+    },
+    {
+      "id": 8,
+      "kind": "capture",
+      "include": true,
+      "optional": false,
+      "label": "Capture the status of steps A to E (Complete = green, anything else = yellow with owner)",
+      "rule": {
+        "type": "task-steps",
+        "letters": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ],
+        "nameHeader": "Name",
+        "statusHeader": "Status",
+        "ownerHeader": "Owner"
+      },
+      "columns": [
+        "Step A",
+        "Step B",
+        "Step C",
+        "Step D",
+        "Step E",
+        "Pending Steps (Owner)"
+      ],
+      "columnStyles": [
+        "complete",
+        "complete",
+        "complete",
+        "complete",
+        "complete",
+        "pending"
+      ]
+    },
+    {
+      "id": 9,
+      "kind": "click",
+      "include": true,
+      "optional": false,
+      "label": "Open Event from the V menu of the first step that has a document",
+      "target": {
+        "special": "open-event-from-task"
+      }
+    },
+    {
+      "id": 10,
+      "kind": "click",
+      "include": true,
+      "optional": false,
+      "label": "Click the Suppliers tab",
+      "target": {
+        "tag": "a",
+        "text": "Suppliers"
+      }
+    },
+    {
+      "id": 11,
+      "kind": "capture",
+      "include": true,
+      "optional": false,
+      "label": "Capture supplier participation (Participated = fine, blank = follow up)",
+      "rule": {
+        "type": "participation",
+        "nameHeader": "Organization Name",
+        "statusHeader": "Status",
+        "okValue": "Participated"
+      },
+      "columns": [
+        "Suppliers Invited",
+        "Suppliers Participated",
+        "Follow Up (No Bid)",
+        "Supplier Status Detail"
+      ],
+      "columnStyles": [
+        "",
+        "",
+        "pending",
+        ""
+      ]
+    }
   ]
 }
