@@ -142,7 +142,7 @@
       "kind": "click",
       "include": true,
       "optional": false,
-      "label": "Open Event from the V menu of the first step that has a document",
+      "label": "Open Event from the menu of the first step that has a document (title link, then the V)",
       "target": {
         "special": "open-event-from-task"
       }

@@ -246,7 +246,7 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
     const until = Date.now() + cfg.timeouts.componentMs;
     while (Date.now() < until && !job.stop && !(frame = await markTasks())) await sleep(500);
     if (!frame) { const e = new Error('timeout'); e.code = 'timeout'; throw e; }
-    for (const how of ['arrow', 'title', 'offset']) {
+    for (const how of ['title', 'arrow', 'offset']) {
       await getPage().keyboard.press('Escape').catch(() => {});
       frame = (await markTasks()) || frame;
       const title = frame.locator('[data-pr-target="1"]').first();
@@ -258,7 +258,7 @@ function createLookup({ getPage, isRecording, resultsDir, loadWorkflow }) {
       const u = Date.now() + 6000;
       while (Date.now() < u) { if (await menuItem().isVisible().catch(() => false)) { await getPage().evaluate(() => document.documentElement.setAttribute('data-pr-stale', '1')).catch(() => {}); await menuItem().click({ timeout: cfg.timeouts.navMs }); return; } await sleep(300); }
     }
-    throw new Error('The step menu with "Open Event" did not open (tried the V arrow, the title link and a click beside the title)');
+    throw new Error('The step menu with "Open Event" did not open (tried the title link, the V arrow and a click beside the title)');
   }
 
   // Waits for a component. Throws errors with code 'not_found' or 'timeout' that the caller turns into row results.
